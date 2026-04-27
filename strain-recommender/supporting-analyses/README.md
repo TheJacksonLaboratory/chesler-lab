@@ -16,4 +16,4 @@ Below is a guide to each file in the `supporting-analyses` folder.
 | `retrospective_manuscript_sensitivity-analysis_non-redundant_comparisons.Rmd` | Assesses sensitivity on non-redundant comparisons introduced by the ontology mapping |
 | `CTD/retrospective_manuscript_CTD_analysis.Rmd` | Multivariate linear regression analyses to assess the effect of mouse strain on EKG and echocardiogram phenotypes relevant to Marfan syndrome and cardiovascular health, using scaled variables, ANOVA-based F-statistics, and BH-corrected p-values to evaluate both overall and variable-specific strain effects |
 | `CTD/retrospective_manuscript_CTD_marfan_gs_SR.Rmd` | Code was used to run Marfan Syndrome (MFS) gene sets through Strain Recommender to predict strain vulnerability |
-| `AMD/Camd_recommender_manuscript_2026-02-23.Rmd` | Cross-Species Gene Expression Analysis for AMD Model Strain Recommendation |
+| `AMD/amd_recommender_manuscript_2026-02-23.Rmd` | Cross-Species Gene Expression Analysis for AMD Model Strain Recommendation |
