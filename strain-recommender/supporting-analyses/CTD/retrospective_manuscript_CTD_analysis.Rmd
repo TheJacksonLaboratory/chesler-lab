@@ -4,6 +4,10 @@ date: "14-August-2025"
 output: html_notebook
 ---
 
+Purpose
+
+Multivariate linear regression analyses to assess the effect of mouse strain on EKG and echocardiogram phenotypes relevant to Marfan syndrome and cardiovascular health, using scaled variables, ANOVA-based F-statistics, and BH-corrected p-values to evaluate both overall and variable-specific strain effects
+
 ```{r}
 
 # run before starting
