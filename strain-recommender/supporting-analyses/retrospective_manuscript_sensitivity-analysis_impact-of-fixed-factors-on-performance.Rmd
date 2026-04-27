@@ -1,0 +1,99 @@
+---
+title: "Sensitivity analysis: impact of fixed-effecs on performance"
+---
+
+Purpose: The following code runs anovas using the final dataset in the global validation. The anovas test to see if a gene set's size, species, or tier impact correctness in the global validation.
+
+```{r}
+
+# load packages
+library(tidyverse)
+library(data.table)
+library(lme4)
+library(tableone)
+library(kableExtra)
+
+```
+
+#### Anovas
+
+Read in the final dataset. All filtering and processing is complete.
+```{r}
+
+final_results <- fread('/projects/chesler-lab/jcpg/retrospective/kleina/retrospective_analysis/results/2026-01-23_retro_mESC_results_final_ddres1.csv.gz', sep = ',', data.table = FALSE)
+
+```
+
+Set up gene set size categories.
+```{r}
+
+final_results <- final_results %>% rename(geneset_size = genes_used)
+
+# gene set size categories- no model convergence issues
+final_results <- final_results %>% mutate(geneset_size_cat = if_else(geneset_size < 50, 1,
+                                                         if_else(geneset_size >= 50 & geneset_size < 100, 2,
+                                                                 if_else(geneset_size >= 100 & geneset_size <500,3,
+                                                                         if_else(geneset_size >= 500, 4, 5)))))
+
+# get counts for how well the gene set size categories are distributed across the data set
+final_results %>% count(geneset_size_cat)
+# geneset_size_cat    n
+# 1                1 5259
+# 2                2  658
+# 3                3 4828
+# 4                4 2387
+
+```
+
+Process results to retain only unique combinations of gene set, strainA, strainB, study (jnum_id), comp_correct, gene set size, gene set size category, tier, and species. This part of the analysis is disease agnostic.
+```{r}
+
+# process dataset to retain only unique combinations
+gene_set_summary_all_best <- final_results %>%
+  reframe(
+    gs_id = gs_id,
+    strainA = strainA,
+    strainB = strainB,
+    jnum_id = jnum_id,
+    comp_correct = correct,
+    geneset_size,
+    geneset_size_cat,
+    tier = tier,
+    species = species
+  ) %>% distinct()
+
+# set up variables as factors where applicable
+gene_set_summary_all_best <- gene_set_summary_all_best %>% mutate(geneset_size_cat = as.factor(geneset_size_cat))
+gene_set_summary_all_best <- gene_set_summary_all_best %>% mutate(gs_id = as.factor(gs_id))
+gene_set_summary_all_best <- gene_set_summary_all_best %>% mutate(tier = as.factor(tier))
+gene_set_summary_all_best <- gene_set_summary_all_best %>% mutate(species = factor(species, levels = c("Mus Musculus", "Homo Sapiens")))
+
+```
+
+
+Models and anovas. Start with restricted model that includes random effects for gene set and study. Then add gene set size category to the model. Add species to the model that includes gene set size category, and then swap out species and add tier to the model that includes gene set size category.
+```{r}
+
+# restricted model
+model1 <- glmer(comp_correct ~ (1| gs_id) + (1|jnum_id), data = gene_set_summary_all_best, family = 'binomial')
+summary(model1)
+
+# gene set size category
+model2 <- glmer(comp_correct ~ (1|gs_id) + (1|jnum_id) + geneset_size_cat, data = gene_set_summary_all_best, family = 'binomial')
+summary(model2)
+
+anova(model1, model2)
+
+# species
+model3 <- glmer(comp_correct ~ (1|gs_id) + (1|jnum_id) + geneset_size_cat + species, data = gene_set_summary_all_best, family = 'binomial')
+summary(model3)
+
+anova(model2, model3)
+
+# tier
+model4 <- glmer(comp_correct ~ (1|gs_id) + (1|jnum_id) + geneset_size_cat + tier, data = gene_set_summary_all_best, family = 'binomial')
+summary(model4)
+
+anova(model2, model4)
+
+```

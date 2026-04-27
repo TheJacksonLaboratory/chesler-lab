@@ -1,0 +1,132 @@
+---
+title: "Marfan gs run through SR"
+date: "15-Jan-2025"
+output: html_notebook
+---
+
+Purpose: The following code was used to run Marfan Syndrome (MFS) gene sets through Strain Recommender to predict strain vulnerability.
+
+```{r}
+
+# run before starting
+setwd("/projects/chesler-lab/jcpg/CTD_2025") 
+
+# load necessary packages
+.libPaths(c('/projects/chesler-lab/chesler-R01-2021/kleina/R/rocker-rstudio/4.3', '/projects/chesler-lab/chesler-R01-2021/kleina/R/rocker-rstudio/4.4', .libPaths()))
+library(tidyverse)
+library(data.table)
+
+```
+
+Read in the gene sets- gene set ids from GeneWeaver (geneweaver.org) are found in the comments when reading in each file
+```{r}
+
+# gs 5
+marfan_5_up <- fread('genesets/de_genes_up_SRP188087_5.txt', sep = '\t', data.table = FALSE) # GS404648
+marfan_5_down <- fread('genesets/de_genes_down_SRP188087_5.txt', sep = '\t', data.table = FALSE) # GS404649
+# put upregulated and downregulated genes together
+marfan_5_all <- rbind(marfan_5_up, marfan_5_down)
+colnames(marfan_5_all) <- c('gene_id', 'score', 'pvalue')
+
+# gs 6
+marfan_6_up <- fread('genesets/de_genes_up_SRP188087_6.txt', sep = '\t', data.table = FALSE) # GS412562
+marfan_6_down <- fread('genesets/de_genes_down_SRP188087_6.txt', sep = '\t', data.table = FALSE) # GS412563
+# put upregulated and downregulated genes together
+marfan_6_all <- rbind(marfan_6_up, marfan_6_down)
+colnames(marfan_6_all) <- c('gene_id', 'score', 'pvalue')
+
+```
+
+Remove suffixes from ensembl ids if necessary- they have '.xx' at the end. Gene sets downloaded from GeneWeaver will have these suffixes removed already.
+```{r}
+
+marfan_5_all <- marfan_5_all %>%
+  mutate(gene_id = sub("\\..*", "", gene_id))
+
+marfan_6_all <- marfan_6_all %>%
+  mutate(gene_id = sub("\\..*", "", gene_id))
+
+```
+
+Combine all data into one gene set. When a gene overlapped between the two sets of data, the gene score was calculated as the sample mean of log base 2 of the fold change. One gene was dropped from the combined gene set due to discordance in the direction of the effect. The combined gene set can be found on GeneWeaver as GS412566.
+```{r}
+
+# get overlapping genes between the two gene sets
+overlap_genes <- intersect(marfan_5_all$gene_id, marfan_6_all$gene_id)
+
+# split genes into overlapping and unique categories
+# unique genes- there are unique genes in both gene sets
+marfan_5_unique <- marfan_5_all[!marfan_5_all$gene_id %in% overlap_genes, ] # 222
+marfan_6_unique <- marfan_6_all[!marfan_6_all$gene_id %in% overlap_genes, ] # 181
+
+# subset gene sets for sign checking
+# overlapping genes
+marfan_5_overlap <- marfan_5_all[marfan_5_all$gene_id %in% overlap_genes, ] # 48
+marfan_6_overlap <- marfan_6_all[marfan_6_all$gene_id %in% overlap_genes, ] # 48
+
+# merge the overlapping data to compare signs
+overlap_genes_merged <- merge(marfan_5_overlap, marfan_6_overlap, 
+                       by = "gene_id", suffixes = c("_5", "_6"))
+
+# check if signs are the same between gs 5 and gs 6
+# only 1 gene in overlap with different sign (ENSMUSG00000040998)
+overlap_genes_merged$same_sign <- sign(overlap_genes_merged$score_5) == sign(overlap_genes_merged$score_6)
+
+# keep only genes with same sign and calculate mean score
+overlap_same_sign <- overlap_genes_merged[overlap_genes_merged$same_sign, ] #47
+overlap_same_sign$mean_score <- rowMeans(overlap_same_sign[, c("score_5", "score_6")])
+
+# create final combined dataset
+# keep: unique genes from both gene sets, and overlapping genes with same sign (with mean score)
+final_gs <- rbind(
+  marfan_5_unique[, c("gene_id", "score")],
+  marfan_6_unique[, c("gene_id", "score")], 
+  data.frame(gene_id = overlap_same_sign$gene_id, 
+            score = overlap_same_sign$mean_score)
+)
+
+# write to file
+fwrite(final_gs, file = '/projects/chesler-lab/jcpg/CTD_2025/genesets/marfan_gs_5_6_2026-01-15.csv', sep = ',')
+
+```
+
+Run Strain Recommender using mouse embryonic stem cell (mESC) imputed data.
+
+Load in data needed to run Strain Recommender: metadata (`meta`) and imputed transcriptomic data (`df`).
+```{r}
+
+# set tissue type to easily read in files
+tissue_type <- 'mESC'
+meta_mesc <- read_delim(paste0('/projects/chesler-lab/jcpg/imputation/data/processed_tissues_v1_3_0/corrected/ingest_dir/imputed_',tissue_type, '_ridge_v1_3_0_sex-corrected-meta.tsv'), delim = '\t', skip = 6)
+meta_mesc <- as.data.frame(meta_mesc)
+    
+df_mesc <- read_delim(paste0('/projects/chesler-lab/jcpg/imputation/data/processed_tissues_v1_3_0/corrected/ingest_dir/imputed_',tissue_type, '_ridge_v1_3_0_sex-corrected-data.tsv.gz'), delim = '\t')
+df_mesc <- as.data.frame(df_mesc)
+
+```
+
+Now run Strain Recommender.
+```{r}
+
+# source all of the recommender code
+# switch directory after recommender runs to save the results
+setwd('/projects/chesler-lab/jcpg/retrospective/kleina/recommender-r')
+source('recommend.R')
+
+# mesc
+sr_mesc_res <- recommend(gs = final_gs, meta = meta_mesc, df = df_mesc)
+
+```
+
+Add `corr_scaled` column to make for easier interpretation of results. This scales the Spearman rho correlation coefficients so that the most vulnerable and/or resistant mouse strains are +1 or -1, respectively.
+```{r}
+
+# add corr_scaled
+sr_mesc_res <- sr_mesc_res %>% mutate(corr_scaled = corr/max(abs(corr)))
+sr_skeletal_res <- sr_skeletal_res %>% mutate(corr_scaled = corr/max(abs(corr)))
+
+# write to file
+fwrite(sr_mesc_res, file = '/projects/chesler-lab/jcpg/CTD_2025/sr_res/sr_mesc_marfan_gs_5_6_2026-01-15.csv', sep = ',')
+
+```
+

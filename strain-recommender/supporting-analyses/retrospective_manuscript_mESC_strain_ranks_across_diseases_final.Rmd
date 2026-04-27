@@ -1,0 +1,486 @@
+---
+title: "Global validation: strain ranks across diseases"
+date: "2026-01-20"
+---
+
+# PURPOSE
+
+analysis to support manuscript, specifically the statement:
+
+Across nearly all diseases evaluated, Strain Recommender identified strains predicted to more closely resemble the disease state than the strains previously used and curated in the literature (Refs). Specifically, in over 88% of diseases, at least one strain with more extreme predicted vulnerability was identified relative to the strain reported in the MGD. Notably, 185 inbred strains (28.2%) were predicted to resemble disease states more frequently than C57BL/6J, the most commonly background for modeling human disease 
+
+# METHODS
+
+## Overview
+This analysis performs the following key steps:
+1. Read in filtered result table 
+2. For each strain, calculate strain ranks based on vulnerability predictions
+3. Compare strain ranks to observed strain ranks for each disease/geneset
+4. Rank strains across diseases by frequency of 'vulnerable' classification
+5. Determine where C57BL/6J ranks relative to other strains
+
+## Load Required Packages
+
+
+```{r}
+
+# load packages
+library(tidyverse)
+library(data.table)
+library(lme4)
+library(tableone)
+library(kableExtra)
+
+```
+
+
+## Set Output Directory
+
+```{r}
+outdir <- "/projects/chesler-lab/jcpg/imputation/robyn/data/retrospective/"
+```
+
+
+## Data Loading and Initial Processing
+
+Read in the final filtered dataset containing retrospective analysis results.
+
+
+```{r}
+
+final_results <- fread("data/supplementary_table3.csv.gz", data.table = FALSE)
+length(unique(final_results$gs_id))
+
+# Check the number of unique values in non-numeric variables
+# This helps understand the scope of the dataset
+nvars <- c("fprA", "fprB", "distance_pred", "sensitivity", "max_distance")
+apply(final_results[, -which(colnames(final_results) %in% nvars)], 2, function(x) length(unique(x)))
+
+```
+## Dataset Scope Assessment
+
+Determine the number of strains and their inclusion status after filtering.
+
+
+```{r}
+s <- unique(c(final_results$strainA, final_results$strainB))
+sinc <- unique(c(final_results$strainA[which(final_results$included_final==1)], final_results$strainB[which(final_results$included_final==1)]))
+cat(length(s), "strains used in the analysis.\n", length(sinc), "included in the final analysis after filtering on fprA <= 0.05.\n")
+```
+
+## Gene Set Analysis Setup
+
+Identify gene sets and their inclusion status for downstream analysis.
+
+
+```{r}
+# Path to strain recommender results
+sr_results <- '/projects/chesler-lab/jcpg/retrospective/kleina/strain_recommender/results/mESC/gs_set1/'
+
+# Get unique gene set IDs that passed filtering
+gsids <- unique(final_results$gs_id[which(final_results$included_final == 1)])
+
+# Create dataframe tracking all gene sets and their inclusion status
+gs_all <- data.frame(gs_id = unique(final_results$gs_id))
+gs_all$included <- as.numeric(gs_all$gs_id %in% gsids)
+
+# Summary of gene set inclusion
+cat("Gene set inclusion summary:\n")
+print(table(gs_all$included, dnn = "Included"))
+cat("Total:", nrow(gs_all), "eligible genesets (prior to filtering for strainA fpr <= 0.05)\n")
+cat(sum(gs_all$included), "included,", sum(!gs_all$included), "not included\n")
+```
+
+## Strain Recommender Results Assembly
+
+Process individual strain recommender result files for each gene set, applying FPR filtering.
+
+
+```{r}
+# Initialize empty dataframe to store all strain results
+strain_results <- data.frame()
+
+fns <- list.files(sr_results, full.names = TRUE)
+
+# Process each gene set individually
+for (gs in gs_all$gs_id) {
+  
+  # Find the appropriate filename for this gene set
+  fn <- fns[grep(paste0(gs, "_.*"), fns)]
+  
+  # Handle cases with multiple or no matching filenames
+  condition <- length(fn) > 1
+  if (condition) {
+    cat("Check filename specification for:", gs, ".\nThere are", length(fn), "filenames. Choosing 'pos1'...\n")
+    fn <- fn[grep("pos1", fn)]
+  } else if (length(fn) == 0) {
+    cat("Check filename specification for:", gs, ".\nThere are", length(fn), "filenames. Skipping...\n")
+  }
+  
+  # Read strain recommender results and filter for sex="both" and fpr <= 0.05
+  sr <- fread(fn, data.table=FALSE) %>% 
+    filter(sex == "both" & fpr <= 0.05)
+  
+  # If no results meet fpr <= 0.05 threshold, relax criteria
+  if (nrow(sr) == 0) {
+    # relax fpr
+    sr <- fread(fn, data.table=FALSE) %>% 
+      filter(sex == "both")
+    
+    # Find best positive and negative correlations (lowest FPR)
+    fpr_pos <- sr$fpr[which.min(sr$fpr[which(sr$corr > 0)])]
+    fpr_neg <- sr$fpr[which.min(sr$fpr[which(sr$corr < 0)])]
+    
+    # Keep results with FPR <= max of best positive or negative
+    sr <- sr %>% 
+      filter(fpr <= max(fpr_pos, fpr_neg))
+  }
+  
+  # Process and standardize the results
+  sr <- sr %>% 
+    select(-sex) %>% 
+    mutate(direction = ifelse(corr >= 0, 1, -1),
+           gs = gs)
+  
+  # Append to main results dataframe
+  strain_results <- rbind(strain_results, sr)
+  
+}
+
+# Clean up and add gene set inclusion information
+strain_results <- strain_results %>% 
+  mutate(gs_id = gs) %>% 
+  select(-gs) %>% 
+  left_join(., gs_all, join_by(gs_id))
+
+cat("Processed", length(unique(strain_results$gs_id)), "gene sets\n")
+cat("Total strain-disease associations:", nrow(strain_results), "\n")
+```
+
+# ANALYSIS 1: Support Statement on Disease Coverage
+
+**Target Statement:** "In over 88% of diseases, at least one strain with more extreme predicted vulnerability was identified relative to the strain reported in the MGD."
+
+## Identify Best Performing Strains
+
+For each gene set, identify the strain with the lowest FPR (best performance) in the appropriate direction.
+
+```{r}
+diseases <- unique(final_results$disease_name)
+# add in rare
+# rare <- final_results %>% 
+#   filter(rare == 1) %>% 
+#   select(disease_name) %>% 
+#   distinct %>% t() %>% as.vector(., "character")
+```
+
+```{r}
+# look at genesets included in the analysis.
+# if score_direction != 'neg1',
+#   annotate final results with the lowest fpr across all 'vulnerable' strains
+# if score_direction == 'neg1', 
+#   annotate final results with the lowest fpr across all 'resistant' strains
+# 
+# Initialize columns to store best strain information
+final_results$lowest_fpr <- NA
+final_results$best_strain <- ""
+gs_problematic <- NULL
+
+# Process each gene set to find best performing strains
+for (gs in gs_all$gs_id) {
+  
+  # Identify records where score_direction == "neg1" (negative correlation expected)
+  neg <- which(final_results$score_direction == "neg1" & final_results$gs_id == gs)
+  
+  # Identify records where score_direction != "neg1" (positive correlation expected) 
+  pos <- which(final_results$score_direction != "neg1" & final_results$gs_id == gs)
+  
+  ## Handle negative correlation cases (score_direction == "neg1")
+  condition <- length(neg) > 0
+  if (condition) {
+    
+    # Find best FPR among strains with negative correlation (direction = -1)
+    best_fpr <- strain_results %>% 
+      filter(gs_id == gs & direction == -1) %>% 
+      select(fpr) %>% 
+      min(.)
+    
+    final_results$lowest_fpr[neg] <- best_fpr
+    
+    # Get strain(s) with best FPR
+    best_strains <- strain_results %>% 
+      filter(gs_id == gs & direction == -1 & fpr == best_fpr) %>% 
+      select(strain) %>% t() %>% as.vector(., "character")
+    
+    final_results$best_strain[neg] <- best_strains[1]
+    
+    # If strainA is among the best strains, annotate it as the best strain
+    condition <- final_results$strainA[neg] %in% best_strains
+    if (any(condition)) {
+      meets_condition <- neg[which(condition==TRUE)]
+      final_results$best_strain[meets_condition] <- final_results$strainA[meets_condition]
+    } 
+    
+  }
+  
+  ## Handle positive correlation cases (score_direction != "neg1")
+  condition <- length(pos) > 0
+  if (condition) {
+    
+    # Filter for positive correlations
+    pos_sr <- strain_results %>% 
+      filter(gs_id == gs & direction == 1)
+    
+    # Check if any positive correlations exist
+    if (nrow(pos_sr) > 0) {
+      best_fpr <-  pos_sr %>% 
+        select(fpr) %>% 
+        min(.)
+      
+      final_results$lowest_fpr[pos] <- best_fpr
+      
+      # Get best performing strains
+      best_strains <- strain_results %>% 
+        filter(gs_id == gs & direction == 1 & fpr == best_fpr) %>% 
+        select(strain) %>% t() %>% as.vector(., "character")
+      
+      final_results$best_strain[pos] <- best_strains[1]
+      
+      # Check if strainA is among best performers. If so annotate strainA as the best strain.
+      condition <- final_results$strainA[pos] %in% best_strains
+      if (any(condition)) {
+        meets_condition <- pos[which(condition==TRUE)]
+        final_results$best_strain[meets_condition] <- final_results$strainA[meets_condition]
+      } 
+      
+    } else {
+      # No positive correlations found - use largest negative correlation
+      gs_problematic <- c(gs_problematic, gs)
+      
+      # Find best available correlation (largest negative)
+      best_fpr <- strain_results %>% 
+        filter(gs_id == gs) %>% 
+        select(corr, fpr) %>% 
+        arrange(-corr, fpr) %>% 
+        summarise(min(fpr[which.max(corr)])) %>% 
+        as.vector(., "numeric")
+      
+      final_results$lowest_fpr[pos] <- best_fpr
+      
+      best_strains <- strain_results %>% 
+        filter(gs_id == gs & fpr == best_fpr) %>% 
+        select(strain) %>% t() %>% as.vector(., "character")
+      
+      final_results$best_strain[pos] <- best_strains[1]
+      
+      # Check if strainA is among best performers. If so annotate strainA as the best strain.
+      condition <- final_results$strainA[pos] %in% best_strains
+      if (any(condition)) {
+        meets_condition <- pos[which(condition==TRUE)]
+        final_results$best_strain[meets_condition] <- final_results$strainA[meets_condition]
+      } 
+    }
+  }
+}
+
+# Report any problematic gene sets
+if (length(gs_problematic) > 0) {
+  cat("Problematic gene sets (no positive correlations):", length(gs_problematic), "\n")
+}
+```
+
+## Calculate Disease Coverage Statistics
+
+Determine what percentage of diseases have better-performing strains than those reported in MGD.
+
+
+```{r}
+# Calculate percentage where best strain differs from reported strain (strainA)
+mu <- final_results %>% 
+  select(gs_id, strainA, fprA, score_direction, disease_name, lowest_fpr, best_strain) %>% 
+  distinct() %>% 
+  summarise(mu = mean(strainA != best_strain)) %>% as.vector(., "numeric")
+
+cat("Specifically, in over", round(mu*100),"% of diseases, at least one strain with more extreme predicted vulnerability was identified relative to the strain reported in the MGD.\n")
+```
+
+
+# ANALYSIS 2: Strain Ranking Analysis
+
+**Target Statement:** "185 inbred strains (28.2%) were predicted to resemble disease states more frequently than C57BL/6J, the most commonly background for modeling human disease"
+
+## Create Disease-Gene Set Mapping
+
+Establish the relationship between diseases and gene sets for proper vulnerability assessment.
+
+## Build Comprehensive Strain Vulnerability Table
+
+Create a table showing which strains are vulnerable for each disease-gene set combination.
+
+
+```{r}
+
+disease_gs_score_direction <- final_results %>% 
+  select(gs_id, disease_name, score_direction) %>% 
+  mutate(disease = disease_name) %>% 
+  select(-disease_name) %>% 
+  distinct()
+
+strain_table <- data.frame()
+disease_table <- data.frame()
+
+# Process each gene set to identify vulnerable/resistant strains
+for (gs in gs_all$gs_id) {
+  sr <- strain_results %>% 
+    filter(gs_id == gs & fpr <= 0.05)
+  
+  # Only proceed if at least one strain met the FPR threshold
+  if (nrow(sr) > 0) {
+    vulnerable <- sr %>% filter(corr >= 0)
+    resistant <- sr %>% filter(corr < 0)
+    strains <- c(vulnerable$strain, resistant$strain)
+    
+    # Get associated diseases for this gene set
+    diseases <- unique(final_results$disease_name[which(final_results$gs_id == gs)])
+    
+    # Create vulnerability indicator (1 = vulnerable, 0 = resistant)
+    if (length(vulnerable) > 0) {
+      is_vulnerable <- as.numeric(strains %in% vulnerable$strain)
+    } else {
+      is_vulnerable <- rep(0, length(strains))
+    }
+    
+    # Create gene set table
+    gs_table <- data.frame(gs_id = gs, strain = strains, vulnerable = is_vulnerable)
+    
+    # Replicate for each associated disease
+    disease_vector <- rep(diseases, each = nrow(gs_table))
+    disease_table <- rbind(disease_table, 
+                           data.frame(disease = disease_vector, bind_rows(replicate(length(diseases), gs_table, simplify = FALSE))))
+  }
+}
+
+# Adjust vulnerability based on score direction
+# If score_direction == "neg1", flip the vulnerability interpretation
+disease_table <- disease_table %>% 
+  left_join(., disease_gs_score_direction, join_by(gs_id, disease)) %>% 
+  mutate(vulnerable = ifelse(score_direction == "neg1", 1 - vulnerable, vulnerable))
+
+# Save comprehensive disease-geneset-strain vulnerability table
+# fwrite(disease_table, paste0(outdir, "retrospective_manuscript_disease_gs_strain_vulnerabilities_2026-01-23.csv.gz"), compress = "gzip")
+
+cat("Created vulnerability table with", nrow(disease_table), "records\n")
+cat("Covering", length(unique(disease_table$disease)), "diseases and", 
+    length(unique(disease_table$strain)), "strains\n")
+```
+
+## Summarize Strain Performance
+
+Create strain-level summary showing frequency of vulnerability across diseases.
+
+```{r}
+# Create disease-level strain vulnerability summary
+strain_table <- disease_table %>% 
+  select(disease, strain, vulnerable) %>% 
+  distinct()
+  
+# Handle any inconsistencies (same strain-disease pair with different vulnerability scores)
+inconsistent <- strain_table %>% 
+  group_by(disease, strain) %>% 
+  tally() 
+
+# Resolve inconsistencies: if strain was vulnerable for disease using any geneset, mark as vulnerable
+strain_table <- strain_table %>% 
+  group_by(disease, strain) %>% 
+  left_join(., inconsistent, join_by(disease, strain)) %>% 
+  mutate(vulnerable = ifelse(n > 1, 1, vulnerable)) %>% 
+  select(-n) %>% 
+  distinct()
+
+# Create strain-level summary statistics
+strain_counts <- strain_table %>% 
+  group_by(strain) %>% 
+  summarise(extreme = n(), vulnerable=sum(vulnerable)) %>% 
+  mutate(extreme_rank = rank(-extreme), 
+         vulnerable_rank = rank(-vulnerable))
+
+cat("Generated summary for", nrow(strain_counts), "strains\n")
+```
+
+## Save Summary Tables
+
+Export the processed tables for further analysis and manuscript preparation.
+
+```{r}
+fwrite(strain_table, paste0(outdir, "retrospective_manuscript_disease_strain_vulnerabilities_2026-01-23.csv.gz"), compress="gzip")
+fwrite(strain_counts, paste0(outdir, "retrospective_manuscript_strain_vulnerabilities_2026-01-23.csv.gz"), compress="gzip")
+```
+
+## C57BL/6J Ranking Analysis
+
+Determine how C57BL/6J ranks relative to other strains in disease vulnerability frequency.
+
+```{r}
+# Get C57BL/6J performance metrics
+b6_ranks <- strain_counts %>% 
+  filter(strain == "C57BL/6J")
+
+# Report results for diseases where strains are vulnerable
+cat("Notably,", length(which(strain_counts$vulnerable_rank < b6_ranks$vulnerable_rank)), "inbred strains", round(mean(strain_counts$vulnerable_rank < b6_ranks$vulnerable_rank)*100,1), "% were predicted to resemble disease states more frequently than C57BL/6J, the most commonly background for modeling human disease.\n\n")
+
+# Report results for diseases where strains are vulnerable or resistant
+cat("Notably,", length(which(strain_counts$extreme_rank < b6_ranks$extreme_rank)), "inbred strains", round(mean(strain_counts$extreme_rank < b6_ranks$extreme_rank)*100,1), "% were predicted to be extreme across diseases more frequently than C57BL/6J, the most commonly background for modeling human disease")
+
+```
+
+```{r}
+# Top 10 most vulnerable strains
+cat("\nTop 10 strains by vulnerability frequency:\n")
+top_vulnerable <- strain_counts %>% 
+  arrange(vulnerable_rank) %>% 
+  head(10) %>% 
+  select(strain, vulnerable, extreme, vulnerable_rank)
+print(top_vulnerable)
+```
+
+
+
+# Overall sensitivity
+
+```{r}
+final_results <- fread("data/supplementary_table3.csv.gz", data.table = FALSE)
+```
+
+```{r}
+final_results %>% 
+  filter(included_final == 1) %>% 
+  summarise(x = sum(correct), n = n())
+```
+
+```{r}
+library(binom)
+#result <- binom.confint(x = 38351, n = 45089, methods = "wilson")
+result <- binom.confint(x = 11197, n = 13132, methods = "wilson")
+print(round(result[4:6]*100, 1))
+```
+## rare
+```{r}
+final_results %>% 
+  filter(included_final == 1 & rare == 1) %>% 
+  summarise(x = sum(correct), n = n())
+```
+
+```{r}
+#result <- binom.confint(x = 19563, n = 24055, methods = "wilson")
+result <- binom.confint(x = 5815, n = 7172, methods = "wilson")
+print(round(result[4:6]*100, 1))
+```
+
+```{r}
+final_results %>% 
+  filter(included_final == 1) %>% 
+  select(jnum_id) %>% 
+  distinct() %>% 
+  tally()
+```
+
