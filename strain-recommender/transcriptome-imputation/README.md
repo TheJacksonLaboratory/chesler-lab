@@ -24,6 +24,9 @@ execution via SLURM submission scripts.
 
 ## Quick Start
 
+# Load using the package name
+library(transcriptome.imputation)
+
 Brief example here.
 
 ## Dependencies
