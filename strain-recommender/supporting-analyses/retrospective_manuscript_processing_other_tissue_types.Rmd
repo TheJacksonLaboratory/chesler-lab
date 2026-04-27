@@ -1,0 +1,378 @@
+---
+title: "Data processing for all other tissue types that aren't mESC"
+date: "01 April 2026"
+---
+
+Purpose: Processing all other tissue type results in accordance with mESC 129 gs pre fpr filter results. We want to add to the manuscript that other tissue types did not perform as well as mESC, strengthening the justification for use of only mESC for the global validation.
+
+load necessary packages
+```{r}
+
+library(data.table)
+library(tidyverse)
+
+```
+
+
+function: read in all tissue type results
+```{r}
+
+read_tissue_results <- function(dir_path = "/projects/chesler-lab/jcpg/retrospective/kleina/retrospective_analysis/results") {
+  files <- list.files(dir_path, pattern = "_all_diseases\\.csv\\.gz$", full.names = TRUE)
+  names(files) <- gsub("_all_diseases\\.csv\\.gz$", "", basename(files))
+  files <- files[names(files) != "mESC"]
+  
+  res_list <- lapply(files, \(f) as_tibble(data.table::fread(f)))
+  
+  # assign to global env as tissue_res
+  iwalk(res_list, ~assign(paste0(.y, "_res_orig"), .x, envir = .GlobalEnv))
+  
+  invisible(res_list)
+}
+
+```
+
+run the function to read in tissue results
+```{r}
+
+read_tissue_results() 
+
+```
+
+read in the 129 pre fpr filter mESC results
+```{r}
+
+mesc_res <- fread('/projects/chesler-lab/jcpg/imputation/robyn/jcpg/recommender_manuscript/global_validation/data/supplementary_table3.csv.gz', data.table = FALSE)
+
+```
+
+filter to the final 129 gs
+```{r}
+
+filter_to_mesc_gs <- function(res_list, gs_col = "gs_id") {
+  mesc_gs <- unique(mesc_res[[gs_col]])
+  
+  iwalk(res_list, ~{
+    filtered <- .x %>% filter(.data[[gs_col]] %in% mesc_gs)
+    assign(paste0(.y, "_res_orig"), filtered, envir = .GlobalEnv)
+  })
+}
+
+```
+
+```{r}
+tissue_names <- c("heart", "liver", "retina", "rpe", "bone", 
+                   "pfc_saline", "skeletal", "striatum_saline", 
+                   "adipose", "striatum", "islet", "hippocampus", "maxilla")
+res_list <- setNames(lapply(tissue_names, \(x) get(paste0(x, "_res_orig"))), tissue_names)
+filter_to_mesc_gs(res_list, gs_col = 'gs_id')
+
+```
+
+Filter results to include only the MP terms in the annots matched to the CORRECT comparisons based on `key` column. The `key` column will include a string of: host strain, host strain exact match compared to strain, compared to exact match, MP ID, MP term name, and jnum id.
+```{r}
+
+# read in the annotations file
+annots <- fread('/projects/chesler-lab/jcpg/retrospective/kleina/retrospective_analysis/annotations/USE_annotations_merged_with_hp_and_disease_v5_with_exact_matches_24Apr2025.csv', data.table= FALSE)
+
+annots <- annots %>% mutate(key = paste0(host_strain, '_', host_strain_exact_match, '_', compared_to, '_', compared_to_exact_match, '_', MP_ID, '_', MP_term_name, '_', jnum_id))
+
+annots <- annots%>% mutate(MP_ID = if_else(MP_ID== "", NA, MP_ID))
+annots <- annots %>% mutate(MP_term_name = if_else(MP_term_name== "", NA, MP_term_name))
+
+```
+
+filter to only disease terms in the final result table- added this to `fill_mappings()` function
+```{r}
+
+# filter_to_mesc_disease <- function(res_list, dis_col = "disease_name") {
+#   mesc_dis <- unique(mesc_res[[dis_col]])
+#   
+#   iwalk(res_list, ~{
+#     filtered <- .x %>% filter(.data[[dis_col]] %in% mesc_dis)
+#     assign(paste0(.y, "_res_orig"), filtered, envir = .GlobalEnv)
+#   })
+# }
+
+```
+
+run the filter_to_mesc_disease function
+```{r}
+
+#filter_to_mesc_disease(res_list, dis_col = "disease_name")
+
+```
+
+Function to capture all possible mappings, followed by filtering by `key` column in the results table which will ensure that the strain comparison is annotated to the same MP term as originally found in the annotations.
+```{r}
+
+mapping <- fread('/projects/chesler-lab/jcpg/retrospective/kleina/mapping/mp_ids_all_hp_matches_mapped_updated_with_disease_v2_03Oct2024.csv', data.table = FALSE)
+
+fill_mappings <- function(tissue_res, mapping, mesc_res, annots) {
+  mapping_cols <- c("MP_ID", "MP_term_name", "HP_ID", "HP_term_name",
+                    "HP_Parent_ID", "HP_Parent_term_name", "disease_name", "database_id")
+  
+  # blanks to NA
+  tissue_res <- tissue_res %>%
+    mutate(across(all_of(mapping_cols), ~na_if(.x, "")))
+  
+  # split: rows missing MP_ID vs rows that have it
+  has_mp <- tissue_res %>% filter(!is.na(MP_ID))
+  needs_mp <- tissue_res %>% filter(is.na(MP_ID)) %>%
+    select(-c(MP_ID, MP_term_name, HP_ID, HP_term_name, HP_Parent_ID, HP_Parent_term_name)) %>%
+    left_join(mapping)
+  needs_mp <- needs_mp[, colnames(tissue_res), with = FALSE]
+  
+  # recombine, deduplicate, filter to mESC MP terms
+  res <- rbind(has_mp, needs_mp) %>%
+    distinct() %>%
+    filter(MP_ID %in% unique(mesc_res$MP_ID)) %>%
+    filter(disease_name %in% unique(mesc_res$disease_name))
+  
+  res <- res %>% mutate(key = paste0(host_strain, '_', host_strain_exact_match, '_', compared_to, '_', compared_to_exact_match, '_', MP_ID, '_', MP_term_name, '_', jnum_id))
+
+  res <- res %>% filter(key %in% annots$key)
+  
+  res <- res %>% distinct()
+  
+}
+
+```
+
+apply function above across all tissues to make sure we capture all mappings
+```{r}
+
+all_tissues <- setNames(
+  lapply(tissue_names, \(x) get(paste0(x, "_res_orig"))),
+  tissue_names
+)
+
+for (tissue in names(all_tissues)) {
+  print(tissue)
+  result <- fill_mappings(all_tissues[[tissue]], mapping, mesc_res = mesc_res, annots = annots)
+  assign(paste0(tissue, "_res"), result, envir = .GlobalEnv)
+}
+
+```
+
+```{r}
+
+length(unique(bone_res$disease_name))
+length(unique(bone_res$MP_ID))
+length(unique(bone_res$gs_id))
+
+length(unique(heart_res$disease_name))
+length(unique(heart_res$MP_ID))
+length(unique(heart_res$gs_id))
+
+length(unique(hippocampus_res$disease_name))
+length(unique(hippocampus_res$MP_ID))
+length(unique(hippocampus_res$gs_id))
+
+length(unique(islet_res$disease_name))
+length(unique(islet_res$MP_ID))
+length(unique(islet_res$gs_id))
+
+length(unique(liver_res$disease_name))
+length(unique(liver_res$MP_ID))
+length(unique(liver_res$gs_id))
+
+length(unique(maxilla_res$disease_name))
+length(unique(maxilla_res$MP_ID))
+length(unique(maxilla_res$gs_id))
+
+length(unique(pfc_saline_res$disease_name))
+length(unique(pfc_saline_res$MP_ID))
+length(unique(pfc_saline_res$gs_id))
+
+length(unique(retina_res$disease_name))
+length(unique(retina_res$MP_ID))
+length(unique(retina_res$gs_id))
+
+length(unique(rpe_res$disease_name))
+length(unique(rpe_res$MP_ID))
+length(unique(rpe_res$gs_id))
+
+length(unique(skeletal_res$disease_name))
+length(unique(skeletal_res$MP_ID))
+length(unique(skeletal_res$gs_id))
+
+length(unique(striatum_res$disease_name))
+length(unique(striatum_res$MP_ID))
+length(unique(striatum_res$gs_id))
+
+length(unique(striatum_saline_res$disease_name))
+length(unique(striatum_saline_res$MP_ID))
+length(unique(striatum_saline_res$gs_id))
+
+length(unique(mesc_res$disease_name))
+length(unique(mesc_res$MP_ID))
+length(unique(mesc_res$gs_id))
+
+```
+Make sure the most vulnerable strain (as annotated) is labeled as 'strainA'. The assumption is that strainA is always the most vulnerable strain and we filtered to fprA <= 0.05. We ignored the fprB of strainB.
+```{r}
+
+rare <- fread("/projects/chesler-lab/jcpg/imputation/robyn/data/retrospective/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+
+correct_and_finalize <- function(res, tissue_name, rare) {
+  
+  # split by sensitivity
+  res_unchanged <- res %>% filter(sensitivity == 1)
+  res_edit <- res %>% filter(sensitivity == 0)
+  
+  # swap strains, fpr, host/compared, and flip y_hat
+  res_edit <- res_edit %>%
+    mutate(
+      sensitivity = 1,
+      temp_strainA = strainA,
+      temp_fprA = fprA,
+      strainA = strainB,
+      strainB = temp_strainA,
+      fprA = fprB,
+      fprB = temp_fprA
+    ) %>%
+    select(-temp_strainA, -temp_fprA) %>%
+    mutate(
+      y_hat = if_else(y_hat == 0, 1, 0),
+      y_id = sensitivity,
+      temp_host_strain = host_strain,
+      temp_host_exact = host_strain_exact_match,
+      host_strain = compared_to,
+      compared_to = temp_host_strain,
+      host_strain_exact_match = compared_to_exact_match,
+      compared_to_exact_match = temp_host_exact
+    ) %>%
+    select(-temp_host_strain, -temp_host_exact)
+  
+  # recombine
+  results_final <- bind_rows(res_unchanged, res_edit)
+  
+  # flag rare diseases and fpr inclusion
+  results_final <- results_final %>%
+    mutate(
+      rare = as.numeric(disease_name %in% rare$`Disease name`),
+      included_final = as.numeric(fprA <= 0.05)
+    )
+  
+  # print summary counts
+  cat("\n---", tissue_name, "---\n")
+  cat("Rare vs not (all diseases):\n")
+  tmp <- results_final %>% select(disease_name, rare) %>% distinct()
+  print(table(tmp$rare))
+  cat("Included final:\n")
+  print(table(results_final$included_final))
+  cat("Rare vs not (included only):\n")
+  tmp <- results_final %>% filter(included_final == 1) %>% select(disease_name, rare) %>% distinct()
+  print(table(tmp$rare))
+  
+  return(results_final)
+
+}
+
+```
+
+```{r}
+
+for (tissue in names(all_tissues)) {
+  res <- get(paste0(tissue, "_res"))
+  result <- correct_and_finalize(res, tissue, rare)
+  assign(paste0(tissue, "_final"), result, envir = .GlobalEnv)
+}
+
+```
+
+noticed that the removal of duplicates from aggregated results did not run correctly for some reason. applying this now so we can use in the rest of the analysis. also removing columns we do not need/use.
+```{r}
+
+remove_dups <- function(res, tissue_name,
+                        key_cols = c("gs_id", "strainA", "strainB", "MP_ID", "jnum_id", "disease_name"),
+                        drop_cols = c("max_distance", "confidence_in_prediction"),
+                        out_dir = "/projects/chesler-lab/jcpg/retrospective/kleina/retrospective_analysis/results") {
+  
+  cat("\n---", tissue_name, "---\n")
+  cat("Before:", nrow(res), "rows,", ncol(res), "cols\n")
+  
+  dups <- which(duplicated(res[, key_cols]))
+  if (length(dups) > 0) {
+    res <- res[-dups, ]
+    cat("Removed", length(dups), "duplicates\n")
+  }
+  
+  res <- res %>% select(-any_of(drop_cols)) %>% distinct()
+  cat("After:", nrow(res), "rows,", ncol(res), "cols\n")
+  
+  out_file <- file.path(out_dir, paste0(tissue_name, "_129_full_res_prefprfilter_corrected_final_dups_removed_", Sys.Date(), ".csv.gz"))
+  fwrite(res, out_file, sep = ",", compress = "gzip")
+  
+  invisible(res)
+}
+
+```
+
+```{r}
+
+for (tissue in names(all_tissues)) {
+  res <- get(paste0(tissue, "_final"))
+  result <- remove_dups(res, tissue)
+  assign(paste0(tissue, "_final"), result, envir = .GlobalEnv)
+}
+
+```
+checks after all processing- number of gs, disease names, and MP IDs
+```{r}
+
+length(unique(bone_res$disease_name))
+length(unique(bone_res$MP_ID))
+length(unique(bone_res$gs_id))
+
+length(unique(heart_res$disease_name))
+length(unique(heart_res$MP_ID))
+length(unique(heart_res$gs_id))
+
+length(unique(hippocampus_res$disease_name))
+length(unique(hippocampus_res$MP_ID))
+length(unique(hippocampus_res$gs_id))
+
+length(unique(islet_res$disease_name))
+length(unique(islet_res$MP_ID))
+length(unique(islet_res$gs_id))
+
+length(unique(liver_res$disease_name))
+length(unique(liver_res$MP_ID))
+length(unique(liver_res$gs_id))
+
+length(unique(maxilla_res$disease_name))
+length(unique(maxilla_res$MP_ID))
+length(unique(maxilla_res$gs_id))
+
+length(unique(pfc_saline_res$disease_name))
+length(unique(pfc_saline_res$MP_ID))
+length(unique(pfc_saline_res$gs_id))
+
+length(unique(retina_res$disease_name))
+length(unique(retina_res$MP_ID))
+length(unique(retina_res$gs_id))
+
+length(unique(rpe_res$disease_name))
+length(unique(rpe_res$MP_ID))
+length(unique(bone_res$gs_id))
+
+length(unique(skeletal_res$disease_name))
+length(unique(skeletal_res$MP_ID))
+length(unique(skeletal_res$gs_id))
+
+length(unique(striatum_res$disease_name))
+length(unique(striatum_res$MP_ID))
+length(unique(striatum_res$gs_id))
+
+length(unique(striatum_saline_res$disease_name))
+length(unique(striatum_saline_res$MP_ID))
+length(unique(striatum_saline_res$gs_id))
+
+length(unique(mesc_res$disease_name))
+length(unique(mesc_res$MP_ID))
+length(unique(mesc_res$gs_id))
+
+```
+

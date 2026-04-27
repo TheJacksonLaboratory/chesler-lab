@@ -1,0 +1,130 @@
+---
+title: "Sensitivity analysis: non-redundant comparisons across diseases"
+---
+
+# PURPOSE
+
+Assess sensitivity on non-redundant comparisons introduced by the ontology mapping. 
+
+# METHODS
+
+A non-redundant subset of diseases was constructed by identifying diseases sharing identical sets of comparisons and retaining a single representative per unique comparison set. The first listed disease was used as the representative, yielding 2,019 diseases.
+
+# CODE
+
+Load packages
+
+```{r, message=FALSE, warning=FALSE}
+library(data.table)
+library(tidyverse)
+library(binom)
+```
+
+Source functions
+
+```{r}
+source("retrospective_function_check_exclusions.R")
+source("retrospective_function_get_sensitivity.R")
+source("retrospective_function_process_data.R")
+```
+
+Read in data
+
+```{r}
+df <- fread("data/supplementary_table3.csv.gz", data.table = FALSE)
+```
+
+# Distinct comparisons in final analysis: distinct sets of MP, jnum, strain comparison, geneset
+
+choose the first-listed disease as the representative disease for this unique set of comparisons
+
+```{r, message=FALSE}
+disease_subset <- df %>% 
+  group_by(disease_name) %>% 
+  select(MP_ID, jnum_id, strainA, strainB, gs_id) %>% 
+  distinct() %>% 
+  summarise(set = sort(paste(MP_ID, jnum_id, strainA, strainB, gs_id, collapse = ","))) %>% 
+  ungroup() %>% 
+  group_by(set) %>% 
+  summarise(n_diseases = n(), 
+            diseases = paste(disease_name, collapse = ","),
+            first_disease = first(disease_name)) %>%
+  arrange(desc(n_diseases))
+
+cat("There are", nrow(disease_subset), "representative diseases with a unique set of comparisons.\n")
+```
+
+# save 
+
+```{r}
+# df <- df %>% 
+#   mutate(nonredundant_comparison = as.numeric(disease_name %in% disease_subset$first_disease)) 
+# fwrite(df, "data/supplementary_table3.csv.gz", compress="gzip")
+```
+
+
+# Calculate disease-specific sensitivities on the non-redundant set of comparisons 
+
+
+```{r}
+# unique comparison variables
+single <- c("gs_id", "strainA", "strainB", "MP_ID", "jnum_id", "disease_name")
+# FPR threshold
+thresh <- 0.05
+# imputed transcriptome
+tissue <- "mESC"
+```
+
+Rare disease list accessed via Orphanet on Oct 25, 2024.  
+```{r}
+rare <- fread("data/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+```
+
+Run results through `process_data()` function. Write each part of result to object.
+
+```{r}
+df_subset <- df %>% 
+  filter(disease_name %in% disease_subset$first_disease)
+
+main <- process_data(df_all = df_subset, rare = rare)
+results_filtered <- main[[1]]
+disease_sensitivities <- main[[2]]
+```
+
+```{r}
+round(summary(disease_sensitivities$sensitivity)*100,1)
+```
+
+```{r}
+n <- length(disease_sensitivities$sensitivity)
+p <- mean(disease_sensitivities$sensitivity)
+sd <- sd(disease_sensitivities$sensitivity)
+s <- 1.96*(sd/sqrt(n))
+#95% CI
+cat("The mean sensitivity =", round(p,3), "(95% CI", round(p - s,3), ",", round(p+s,3), ")\n") 
+```
+
+## Group diseases by sensitivity. Print number of diseases and corresponding percentages per sensitivity category.
+
+```{r}
+# count number of diseases
+n_d_tested <- nrow(disease_sensitivities)
+
+# determine number of diseases that fall into each sensitivity category
+n_ge90 <- length(which(disease_sensitivities$sensitivity >= 0.9))
+n_mod <- length(which(disease_sensitivities$sensitivity >= 0.7 & disease_sensitivities$sensitivity < 0.9))
+n5070 <- length(which(disease_sensitivities$sensitivity > 0.5 & disease_sensitivities$sensitivity < 0.7))
+nle50 <- length(which(disease_sensitivities$sensitivity <= 0.5))
+
+# print number of diseases per sensitivity category
+n_ge90
+n_mod
+n5070
+nle50
+
+# print percentage of diseases per sensitivity category
+n_ge90 / n_d_tested * 100
+n_mod/ n_d_tested *100
+n5070/ n_d_tested *100
+nle50/ n_d_tested *100
+```

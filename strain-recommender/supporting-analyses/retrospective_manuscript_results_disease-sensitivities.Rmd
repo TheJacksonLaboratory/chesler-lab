@@ -1,0 +1,230 @@
+---
+title: "Results: disease sensitivity calculations"
+---
+
+Purpose: The following code reads in the final filtered result set and calculates the disease sensitivity distribution across all diseases, as well as across the subset of rare diseases.
+
+Data will be filtered to fprA <= 0.05 (as indicated by the `included_final` variable) in rlb's `process_data()` function.
+
+```{r}
+
+# load necessary packages
+library(tidyverse)
+library(data.table) 
+library(R.utils)
+library(binom)
+
+```
+
+Source functions
+
+unit tests for functions in unit_tests/
+
+```{r}
+source("retrospective_function_process_data.R")
+source("retrospective_function_get_sensitivity.R")
+source("retrospective_function_check_exclusions.R")
+```
+
+
+Read in the results
+```{r}
+
+results  <- fread('data/supplementary_table3.csv.gz', sep = ',', data.table = FALSE)
+
+```
+
+Rare disease list accessed via Orphanet on Oct 25, 2024.  
+```{r}
+
+rare <- fread("data/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+
+```
+
+
+```{r}
+# unique comparison variables
+single <- c("gs_id", "strainA", "strainB", "MP_ID", "jnum_id", "disease_name")
+# FPR threshold
+thresh <- 0.05
+# imputed transcriptome
+tissue <- "mESC"
+```
+
+
+Run results through `process_data()` function. Write each part of result to object.
+```{r}
+
+main <- process_data(df_all = results, rare = rare, thresh = 0.05)
+results_filtered <- main[[1]]
+disease_sensitivities <- main[[2]]
+
+```
+
+Disease-specific performance overview
+
+```{r}
+cat("Number of diseases:", nrow(disease_sensitivities), "\n")
+cat("Summary of disease-specific sensitivities:\n")
+print(summary(disease_sensitivities$sensitivity))
+cat("\n")
+
+n <- length(disease_sensitivities$sensitivity)
+p <- mean(disease_sensitivities$sensitivity)
+sd <- sd(disease_sensitivities$sensitivity)
+s <- 1.96*(sd/sqrt(n))
+cat("Mean sensitivity =", round(p,3), paste0(" (95% CI ", round(p - s,3), ",", round(p+s,3), ")."), "\n")
+
+cat("\n\n")
+cat("Number of rare diseases:", sum(disease_sensitivities$rare), "\n") 
+cat("Proportion of rare diseases:", sum(disease_sensitivities$rare)/ nrow(disease_sensitivities), "\n")
+cat("Summary of rare disease-specific sensitivities:\n")
+print(summary(disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)]))
+cat("\n")
+
+is_rare <- which(disease_sensitivities$rare == 1)
+n <- length(disease_sensitivities$sensitivity[is_rare])
+p <- mean(disease_sensitivities$sensitivity[is_rare])
+sd <- sd(disease_sensitivities$sensitivity[is_rare])
+s <- 1.96*(sd/sqrt(n))
+cat("Mean sensitivity of rare diseases =", round(p,3), paste0(" (95% CI ", round(p - s,3), ",", round(p+s,3), ")."), "\n")
+```
+
+Group diseases by sensitivity. Print number of diseases and corresponding percentages per sensitivity category.
+
+```{r}
+
+# count number of diseases
+n_d_tested <- nrow(disease_sensitivities)
+
+# determine number of diseases that fall into each sensitivity category
+n_ge90 <- length(which(disease_sensitivities$sensitivity >= 0.9))
+n_mod <- length(which(disease_sensitivities$sensitivity >= 0.7 & disease_sensitivities$sensitivity < 0.9))
+n50 <- length(which(disease_sensitivities$sensitivity > 0.5 & disease_sensitivities$sensitivity < 0.7))
+nl50 <- length(which(disease_sensitivities$sensitivity <= 0.5))
+
+# print number of diseases per sensitivity category
+n_ge90
+n_mod
+n50
+nl50
+
+# print percentage of diseases per sensitivity category
+n_ge90 / n_d_tested * 100
+n_mod/ n_d_tested *100
+n50/ n_d_tested *100
+nl50/ n_d_tested *100
+
+```
+
+Create sensitivity distribution pie chart for all diseases.
+```{r}
+# Pie Chart with Percentages
+slices <- c( n_ge90, n_mod, n50, nl50)
+
+lbls <- c("High sensitivity: ", "Moderately high sensitivity: ", "Moderate sensitivity: ", "Low sensitivity: ")
+n <- slices
+pct <- round(slices/sum(slices)*100)
+lbls <- rep("",4)
+pie(slices,labels = lbls, col=c("#225ea8", "#41b6c4", "#a1dab4", "#f7f7f7"),
+   main="All diseases")
+
+svg("data/results_pie_all.svg", bg = "transparent")
+pie(slices,labels = lbls, col=c("#225ea8", "#41b6c4", "#a1dab4", "#f7f7f7"))
+dev.off()
+
+```
+
+Now do the same things for the rare disease subset.
+```{r}
+
+# count number of rare diseases
+r_d_tested <- length(which(disease_sensitivities$rare==1))
+
+# determine number of rare diseases that fall into each sensitivity category
+r_ge90 <- length(which(disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] >= 0.9))
+r_mod <- length(which(disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] >= 0.7 & disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] < 0.9))
+r50 <- length(which(disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] >= 0.5 & disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] < 0.7))
+rl50 <- length(which(disease_sensitivities$sensitivity[which(disease_sensitivities$rare==1)] < 0.5))
+
+# print number of rare diseases per sensitivity category
+r_ge90
+r_mod
+r50
+rl50
+
+# print percentage of rare diseases per sensitivity category
+r_ge90 / r_d_tested*100
+r_mod / r_d_tested*100
+r50 / r_d_tested*100
+rl50 / r_d_tested*100
+
+```
+
+Create sensitivity distribution pie chart for rare disease subset.
+```{r}
+# Pie Chart with Percentages
+slices <- c( r_ge90, r_mod, r50, rl50)
+
+lbls <- c("High sensitivity: ", "Moderately high sensitivity: ", "Moderate sensitivity: ", "Low sensitivity: ")
+n <- slices
+pct <- round(slices/sum(slices)*100)
+lbls <- rep("",4)
+pie(slices, labels=lbls, col=c("#225ea8", "#41b6c4", "#a1dab4", "#f7f7f7"))
+
+svg("data/results_pie_rare.svg", bg = "transparent")
+pie(slices,labels = lbls, col=c("#225ea8", "#41b6c4", "#a1dab4", "#f7f7f7"))
+dev.off()
+```
+
+
+
+## Details about the final result set. 
+
+Number of MP terms, studies, gene sets, unique strain pairs, unique comparisons, and unique strain names.
+
+Number of MP terms.
+```{r}
+
+length(table(results_filtered$MP_ID))
+
+```
+
+Number of studies.
+```{r}
+length(table(results_filtered$jnum_id))
+
+```
+
+Number of gene sets.
+```{r}
+length(table(results_filtered$gs_id))
+
+```
+
+Number unique comparisons
+
+```{r}
+nrow(unique(results_filtered[which(results_filtered$included==1), c('gs_id', 'strainA', 'strainB', 'jnum_id', 'MP_ID')]))
+```
+
+Number unique strain comparisons
+
+```{r}
+nrow(unique(results_filtered[which(results_filtered$included==1), c('strainA', 'strainB', 'jnum_id', 'MP_ID')]))
+```
+
+Number of unique strain pairs.
+```{r}
+
+nrow(unique(results_filtered[, c('strainA', 'strainB')]))
+
+```
+
+Number of unique strains.
+```{r}
+
+length(unique(c(results_filtered$strainA, results_filtered$strainB)))
+
+```
+

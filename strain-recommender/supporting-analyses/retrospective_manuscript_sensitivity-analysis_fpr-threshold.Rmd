@@ -1,0 +1,95 @@
+---
+title: "Sensitivity analysis: FPR threshold"
+---
+
+Purpose: The following code reads in the global validation study results to assess mean sensitivity when setting fpr cutoffs in 0.05 increments.
+
+```{r}
+
+# load necessary packages
+library(tidyverse)
+library(data.table) 
+library(R.utils)
+library(binom)
+library(patchwork)
+
+```
+
+Source functions
+
+unit tests for functions in unit_tests/
+
+```{r}
+source("retrospective_function_process_data.R")
+source("retrospective_function_get_sensitivity.R")
+source("retrospective_function_check_exclusions.R")
+```
+
+Read in the results table before fprA filtering. This contains 129 gene sets.
+```{r}
+results <- fread("data/supplementary_table3.csv.gz", data.table = FALSE)
+length(unique(results$gs_id))
+```
+
+Get an idea of the fprA distribution via a simple histogram, summary stats.
+```{r}
+
+ggplot(data = results) + geom_histogram(aes(fprA), bins= 20) + theme_bw()
+
+summary(results$fprA)
+
+```
+
+ Rare disease list accessed via Orphanet on Oct 25, 2024.  
+```{r}
+
+rare <- fread("data/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+
+```
+
+
+
+```{r}
+# unique comparison variables
+single <- c("gs_id", "strainA", "strainB", "MP_ID", "jnum_id", "disease_name")
+# imputed transcriptome
+tissue <- "mESC"
+```
+
+```{r}
+thresholds <- c(0.05, 0.10, 0.15, 0.20)
+n_diseases <- NULL
+thresholded_results <- data.frame()
+for (threshold in thresholds) {
+  main <- process_data(df_all = results, rare = rare, thresh = threshold)
+  disease_sensitivities <- main[[2]]
+  disease_sensitivities$thresh = threshold
+  n_diseases <- c(n_diseases, nrow(disease_sensitivities))
+  thresholded_results <- rbind(thresholded_results, disease_sensitivities)
+}
+```
+
+# Calculate mean sensitivity and 95% CI for thresholds
+
+```{r}
+thresholds <- c(0.05, 0.10, 0.15, 0.20)
+mean_sensitivity <- data.frame()
+for (threshold in thresholds) {
+  subset <- thresholded_results %>% 
+    filter(thresh == threshold)
+  n <- nrow(subset)
+  p <- mean(subset$sensitivity) 
+  sd <- sd(subset$sensitivity)
+  s <- 1.96*(sd/sqrt(n))
+  mean_sensitivity <- rbind(mean_sensitivity,
+                            data.frame(thresh = threshold, mean=round(p,3),
+                                       lower=round(p-s, 3), upper=round(p+s,3)))
+}
+
+mean_sensitivity
+```
+```{r}
+names(n_diseases) <- thresholds
+print(n_diseases)
+```
+

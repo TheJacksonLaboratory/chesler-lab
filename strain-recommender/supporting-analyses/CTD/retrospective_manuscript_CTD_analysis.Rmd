@@ -1,0 +1,358 @@
+---
+title: "CTD Analysis"
+date: "14-August-2025"
+output: html_notebook
+---
+
+```{r}
+
+# run before starting
+# setwd("/projects/chesler-lab/jcpg/CTD_2025") 
+
+.libPaths(c('/projects/chesler-lab/chesler-R01-2021/kleina/R/rocker-rstudio/4.3', '/projects/chesler-lab/chesler-R01-2021/kleina/R/rocker-rstudio/4.4', .libPaths()))
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(e1071)
+
+```
+
+read in the data
+```{r}
+
+# full df
+data_full <- fread(file = '/projects/chesler-lab/jcpg/CTD_2025/CTD_data_15July2025.csv', sep = ',', data.table = FALSE)
+# filtered df- 7 mice with non-matching jr strains to CC036 or CC027 removed
+data_filtered <- fread(file = '/projects/chesler-lab/jcpg/CTD_2025/CTD_data_filtered_13Aug2025.csv', sep = ',', data.table = FALSE)
+
+```
+
+set up variable lists for echo and ekg variables being used for models
+```{r}
+
+ekg_vars<- c('tpeak_tend_interval_msec', 't_amplitude_mv', 'qrs_interval_msec', 'jt_interval_msec', 'rr_interval_msec', 'p_duration_msec', 'st_amplitude_mv') # 7 variables
+echo_vars<- c('asc_ao', 'linear2_aortic_annulus', 'linear3_aortic_sinus', 'linear4_sinotabular_junction', 'ef_sax_m_mode', 'fs_sax_m_mode', 'lvid_d_depth_sax_m_mode', 'lvid_s_depth_sax_m_mode', 'lv_vol_d_sax_m_mode', 'lv_vol_s_sax_m_mode', 'av_peak_vel', 'aov_peak_vel_std') # 11 variables, + 1 std for av_peak_vel
+
+```
+
+set up models-
+ekg variables
+
++ tpeak_tend_interval_msec- latency from peak of T-wave to end of T-wave
++ t_amplitude_mv- amplitude of T-wave (ventricular repolarization)
++ qrs_interval_msec- duration of QRS complex (ventricular depolarization)
++ jt_interval_msec- latency from end of QRS complex (S-wave) to end of T-wave (ventricular repolarization)
++ rr_interval_msec- latency between successive R-waves
++ p_duration_msec- duration of P-wave (atrial depolarization)
++ st_amplitude_mv- latency from end of QRS complex (ventricular depolarization) to start of T-wave (ventricular repolarization)
+```{r}
+# put df together
+ekg_model_df <- data_filtered %>% dplyr::select(mouse_id:genotype_manifest, ekg_vars)
+# scale each of the variables to put all on the same scale
+ekg_model_df_scaled <- ekg_model_df %>%
+  mutate(across(all_of(ekg_vars), scale))
+
+# set up multivariate response regression model using all variables as 'one'
+strain_ekg_model <- lm(cbind(as.matrix(ekg_model_df_scaled[, ekg_vars]))  ~ jr_strain , data = ekg_model_df_scaled)
+
+summary(strain_ekg_model) # we are using model with strain as the only predictor because that is what we are interested in
+
+```
+
+Does strain have an overall multivariate effect across all ekg phenotypes considered together?
+```{r}
+
+anova(strain_ekg_model) # manova since multiple response variables were combined into one
+
+```
+
+```{r}
+# marginal means by strain (averaged over sex) for ALL ekg variables
+strain_ekg_marginal_means <- ekg_model_df_scaled %>%
+  group_by(jr_strain) %>%
+  summarise(across(all_of(ekg_vars), ~ mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+print(strain_ekg_marginal_means)
+
+# SE and CI 95% for marginal means
+se <- function(x) sd(x, na.rm = TRUE) / sqrt(sum(!is.na(x)))
+ci95 <- function(x) {
+  n <- sum(!is.na(x))
+  m <- mean(x, na.rm = TRUE)
+  s <- sd(x, na.rm = TRUE)
+  error <- qt(0.975, df = n - 1) * s / sqrt(n)
+  c(lower = m - error, upper = m + error)
+}
+
+# get stats and format 
+strain_ekg_summary <- ekg_model_df_scaled %>%
+  group_by(jr_strain) %>%
+  summarise(across(all_of(ekg_vars),
+                   list(mean = ~ mean(.x, na.rm = TRUE),
+                        SE = ~ se(.x),
+                        CI_low = ~ ci95(.x)[1],
+                        CI_high = ~ ci95(.x)[2]),
+                   .names = "{.col}_{.fn}"),
+            .groups = "drop")
+
+# format mean ± SE if desired
+strain_ekg_formatted <- strain_ekg_summary %>%
+  rowwise() %>%
+  mutate(across(ends_with("_mean"),
+                ~ paste0(round(.x, 2), " ± ",
+                         round(cur_data()[[sub("_mean", "_SE", cur_column())]], 2)),
+                .names = "{.col}_formatted"))
+
+# print table
+print(strain_ekg_formatted)
+
+# marginal means by sex (averaged over strain) for ALL ekg variables  
+sex_ekg_marginal_means <- ekg_model_df_scaled %>%
+  group_by(sex) %>%
+  summarise(across(all_of(ekg_vars), ~ mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+print(sex_ekg_marginal_means)
+
+```
+
+Does strain significantly affect the specific phenotypes?
+```{r}
+
+# this pulls the F stat, etc from the model
+# values are the same as if you run summary(model), but this is a cleaner way to pull the F statistic, etc.
+summary_aov_ekg<- summary.aov(strain_ekg_model)
+
+summary_aov_ekg_results <- purrr::map_dfr(seq_along(summary_aov_ekg), function(i) {
+  tab <- summary_aov_ekg[[i]]
+  tibble(
+    variable = names(summary_aov_ekg)[i],
+    df1      = tab["jr_strain", "Df"],
+    df2      = tab["Residuals", "Df"],
+    F        = tab["jr_strain", "F value"],
+    p        = tab["jr_strain", "Pr(>F)"]
+  )
+})
+
+summary_aov_ekg_results <- summary_aov_ekg_results %>%
+  mutate(p_adj = p.adjust(p, method = "BH"))
+
+summary_aov_ekg_results
+
+```
+
+How does strain affect this phenotype in terms of direction and magnitude?
+```{r}
+
+# account for multiple testing
+# pull values from model summary (estimates, pvalues)
+strain_ekg_model_summary <- summary(strain_ekg_model)
+
+# initialize empty vectors to store values
+response_names <- names(strain_ekg_model_summary)
+all_pvalues <- c()
+all_coefficients <- c()
+variable_labels <- c()
+
+# go through each response variable
+for(i in 1:length(response_names)) {
+  # get p-values for jr_strain coefficient
+  p_val <- strain_ekg_model_summary[[i]]$coefficients[2, "Pr(>|t|)"]
+  print(p_val)
+  coef_val <- strain_ekg_model_summary[[i]]$coefficients[2, "Estimate"]
+  print(coef_val)
+  
+  all_pvalues <- c(all_pvalues, p_val)
+  all_coefficients <- c(all_coefficients, coef_val)
+  variable_labels <- c(variable_labels, paste0(response_names[i], "_jr_strain"))
+  
+  if(i == length(response_names)){
+    break
+  }
+}
+
+# apply BH correction across all ekg variables
+adjusted_pvalues <- p.adjust(all_pvalues, method = "BH")
+
+# create results table
+results <- data.frame(
+  ekg_variable = response_names,
+  coefficient = all_coefficients,
+  original_p = all_pvalues,
+  adjusted_p = adjusted_pvalues,
+  significant_original = all_pvalues < 0.05,
+  significant_adjusted = adjusted_pvalues < 0.05
+)
+
+# print table
+print(results)
+
+```
+
+echo variables
+pulled variables thought to be most important with respect to marfan syndrome and cardiovascular health in relation to an echo
+
++ asc_ao- diameter of ascending aortic valve
++ linear2_aortic_annulus- diameter of aortic annulus
++ linear3_aortic_sinus- diameter of aortic sinus
++ linear4_sinotabular_junction- diameter of sinotubular junction
++ ef_sax_m_mode- ejection fraction (percentage of blood pumped out of heart with each beat)
++ fs_sax_m_mode- fractional shortening (percentage of ventricular size difference before and after ventricular contraction)
++ lvid_d_depth_sax_m_mode- left ventricular interior diameter standard deviation during diastole
++ lvid_s_depth_sax_m_mode- left ventricular interior diameter standard deviation during systole- what about the std variables?
++ lv_vol_d_sax_m_mode- left ventricular volume during diastole
++ lv_vol_s_sax_m_mode- left ventricular volume during systole
++ av_peak_vel- measures the maximum blood flow velocity across the aortic valve- what about the std variable?
++ aov_peak_vel_std- standard deviation
+
+std for av_peak_vel (aov_peak_vel_std)- is large (range 8-99), so using to calculate mean/std to then use that in the model 
+
+```{r}
+
+# put df together
+echo_model_df <- data_filtered %>% dplyr::select(mouse_id:genotype_manifest, echo_vars)
+# divide av_peak_vel by aov_peak_vel_std
+echo_model_df <- echo_model_df %>% mutate(av_peak_vel = av_peak_vel/aov_peak_vel_std) %>% dplyr::select(-aov_peak_vel_std)
+
+# remove aov_peak_vel_std from the echo_vars vector
+echo_vars <- echo_vars[echo_vars != "aov_peak_vel_std"]
+
+# scale each of the variables to put all on the same scale
+echo_model_df_scaled <- echo_model_df %>%
+  mutate(across(all_of(echo_vars), scale))
+
+# set up multivariate response regression model using all variables as 'one'
+strain_echo_model <- lm(cbind(as.matrix(echo_model_df_scaled[, echo_vars]))  ~ jr_strain , data = echo_model_df_scaled)
+
+summary(strain_echo_model) # we are using model with strain as the only predictor because that is what we are interested in
+
+```
+
+Does strain have an overall multivariate effect across all echo phenotypes considered together?
+```{r}
+
+anova(strain_echo_model)
+
+```
+
+```{r}
+
+# marginal means by strain (averaged over sex) for ALL echo variables
+strain_echo_marginal_means <- echo_model_df_scaled %>%
+  group_by(jr_strain) %>%
+  summarise(across(all_of(echo_vars), ~ mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+print(strain_echo_marginal_means)
+
+# SE and CI 95% for marginal means
+se <- function(x) sd(x, na.rm = TRUE) / sqrt(sum(!is.na(x)))
+ci95 <- function(x) {
+  n <- sum(!is.na(x))
+  m <- mean(x, na.rm = TRUE)
+  s <- sd(x, na.rm = TRUE)
+  error <- qt(0.975, df = n - 1) * s / sqrt(n)
+  c(lower = m - error, upper = m + error)
+}
+
+# get stats and format
+strain_echo_summary <- echo_model_df_scaled %>%
+  group_by(jr_strain) %>%
+  summarise(across(all_of(echo_vars),
+                   list(mean = ~ mean(.x, na.rm = TRUE),
+                        SE = ~ se(.x),
+                        CI_low = ~ ci95(.x)[1],
+                        CI_high = ~ ci95(.x)[2]),
+                   .names = "{.col}_{.fn}"),
+            .groups = "drop")
+
+# format mean ± SE if desired
+strain_echo_formatted <- strain_echo_summary %>%
+  rowwise() %>%
+  mutate(across(ends_with("_mean"),
+                ~ paste0(round(.x, 2), " ± ",
+                         round(cur_data()[[sub("_mean", "_SE", cur_column())]], 2)),
+                .names = "{.col}_formatted"))
+
+# print table
+print(strain_echo_formatted)
+
+# marginal means by sex (averaged over strain) for ALL echo variables  
+sex_echo_marginal_means <- echo_model_df_scaled %>%
+  group_by(sex) %>%
+  summarise(across(all_of(echo_vars), ~ mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+print(sex_echo_marginal_means)
+
+```
+
+Does strain significantly affect the specific phenotypes?
+```{r}
+
+# this pulls the F stat, etc from the model
+# values are the same as if you run summary(model), but this is a cleaner way to pull the F statistic, etc.
+summary_aov_echo <- summary.aov(strain_echo_model)
+
+summary_aov_echo_results <- purrr::map_dfr(seq_along(summary_aov_echo), function(i) {
+  tab <- summary_aov_echo[[i]]
+  tibble(
+    variable = names(summary_aov_echo)[i],
+    df1      = tab["jr_strain", "Df"],
+    df2      = tab["Residuals", "Df"],
+    F        = tab["jr_strain", "F value"],
+    p        = tab["jr_strain", "Pr(>F)"]
+  )
+})
+
+summary_aov_echo_results <- summary_aov_echo_results %>%
+  mutate(p_adj = p.adjust(p, method = "BH"))
+
+summary_aov_echo_results
+
+```
+
+How does strain affect this phenotype in terms of direction and magnitude?
+```{r}
+
+#account for multiple testing
+# pull values from model summary (estimates, pvalues)
+strain_echo_model_summary <- summary(strain_echo_model)
+
+# initialize empty vectors to store values
+response_names <- names(strain_echo_model_summary)
+all_pvalues <- c()
+all_coefficients <- c()
+variable_labels <- c()
+
+# go through each response variable
+for(i in 1:length(response_names)) {
+  # get p-values for jr_strain coefficient
+  p_val <- strain_echo_model_summary[[i]]$coefficients[2, "Pr(>|t|)"]
+  coef_val <- strain_echo_model_summary[[i]]$coefficients[2, "Estimate"]
+  
+  all_pvalues <- c(all_pvalues, p_val)
+  all_coefficients <- c(all_coefficients, coef_val)
+  variable_labels <- c(variable_labels, paste0(response_names[i], "_jr_strain"))
+  
+   if(i == length(response_names)){
+    break
+   }
+  
+}
+
+# apply BH correction across all echo variables
+adjusted_pvalues <- p.adjust(all_pvalues, method = "BH")
+
+# create results table
+results <- data.frame(
+  echo_variable = response_names,
+  coefficient = all_coefficients,
+  original_p = all_pvalues,
+  adjusted_p = adjusted_pvalues,
+  significant_original = all_pvalues < 0.05,
+  significant_adjusted = adjusted_pvalues < 0.05
+)
+
+print(results)
+
+```
+
+

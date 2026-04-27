@@ -1,0 +1,214 @@
+---
+title: "AMD genesets using updated pipeline"
+author: "Robyn L Ball"
+date: "February 23, 2026"
+#output: html_notebook
+---
+
+Methods: Cross-Species Gene Expression Analysis for AMD Model Strain Recommendation
+
+Data Sources and Processing
+
+We utilized strand-specific RNA sequencing data from a published study (PMID: 29445097) that identified differentially expressed antisense transcripts in age-related macular degeneration (AMD). The study compared peripheral retina (PR) and retinal pigment epithelium-choroid-sclera (PRCS) tissues between AMD patients and matched normal controls. We focused on antisense differentially expressed genes (DEGs) that were significantly altered in both retinal and RPE tissues, using retinal log fold-change values as our primary signal given the strongest differential expression was observed in retinal AMD versus normal antisense genes.
+
+Gene Set Construction
+From Supplementary Table 2 of the source publication, we extracted antisense DEGs meeting the following criteria:
+- Benjamini-Hochberg corrected q-value ≤ 0.0001 in both retinal and RPE tissues
+- Present in both tissue types (n=417 genes after intersection)
+- Log fold-change values derived from retinal tissue analysis
+
+Human-to-mouse gene orthologs were mapped using orthology data from the VoICE database v3. Genes with known retinal degeneration mutations in mouse strains (filtered using Chang, et al. 2002) were not included in the analysis.
+
+Mouse Strain Recommendation Analysis
+We applied Strain Recommender to identify mouse strains with gene expression profiles most similar to the human AMD antisense gene signature in the peripheral retina. https://geneweaver.org/viewgenesetdetails/412575
+
+The analysis utilized:
+
+- Expression data: Imputed mouse embryonic stem cell (mESC) gene expression data (v1.3.0, sex-corrected)
+- Target strains: JAX retinal degeneration strains as validation set
+- Method: Spearman's rank order correlation between strain expression profiles and AMD gene signature scores
+- Implementation: Recommendation algorithm (recommend.R) 
+
+Validation Strategy
+Known retinal degeneration strains (Chang et a;. 2002) served as positive controls evaluate to validate the recommendation system's ability to identify relevant mouse models for retinal pathology. Strain recommendations were ranked by correlation coefficient, with higher correlations indicating greater similarity to the human AMD antisense expression signature.
+
+This approach enabled systematic identification of mouse strains whose gene expression patterns most closely resemble the antisense transcriptional dysregulation observed in human AMD tissues.
+paper: https://pubmed.ncbi.nlm.nih.gov/29445097/
+
+
+ ==============================================================================
+# AMD Mouse Strain Recommendation Analysis
+# Cross-species analysis of antisense gene expression signatures
+# ==============================================================================
+
+# Load required libraries and source functions
+
+```{r}
+code_dir <- "/projects/chesler-lab/jcpg/imputation/robyn/recommender-r/"
+options(stringsAsFactors = FALSE)
+library(data.table)
+source(paste0(code_dir, "recommend.R"))
+source(paste0(code_dir, "get_sample_concordance.R"))
+```
+
+# ==============================================================================
+# SECTION 1: Load orthology mapping data (human to mouse genes)
+# ==============================================================================
+
+
+```{r}
+# voice v3
+h2m <- fread("/projects/chesler-lab/voice/bulk/111/mm/Ortholog.csv.gz", data.table=FALSE)
+h2m <- h2m %>% 
+  dplyr::select(V1, V5) %>% 
+  setNames(c("m_gene_id", "h_gene_id"))
+```
+
+# ==============================================================================
+# SECTION 2: Add gene annotation information (names, chromosomes)
+# ==============================================================================
+
+
+```{r}
+hgenes <- fread("/projects/chesler-lab/voice/rlb/voice/query/applications/ap3m2_manuscript/data/v3/hgenes.csv.gz", data.table = FALSE)
+mgenes <- fread("/projects/chesler-lab/voice/rlb/voice/query/applications/ap3m2_manuscript/data/v3/mgenes.csv.gz", data.table = FALSE)
+
+h2m <- hgenes %>% 
+  rename(h_gene_id = gene_id,
+         h_gene_name = gene_name,
+         h_chr = chr) %>% 
+  dplyr::select(h_gene_id, h_gene_name, h_chr) %>% 
+  inner_join(h2m, ., join_by(h_gene_id))
+
+h2m <- mgenes %>% 
+  rename(m_gene_id = gene_id,
+         m_gene_name = gene_name,
+         m_chr = chr) %>% 
+  dplyr::select(m_gene_id, m_gene_name, m_chr) %>% 
+  inner_join(h2m, ., join_by(m_gene_id))
+```
+
+# ==============================================================================
+# SECTION 3: Load mouse imputed expression data for Strain Recommender
+# ==============================================================================
+
+```{r}
+
+mesc_df <- fread("/projects/chesler-lab/jcpg/imputation/data/processed_tissues_v1_3_0/corrected/ingest_dir/imputed_mESC_ridge_v1_3_0_sex-corrected-data.tsv.gz", data.table=FALSE)
+mesc_meta <- fread("/projects/chesler-lab/jcpg/imputation/data/processed_tissues_v1_3_0/corrected/ingest_dir/imputed_mESC_ridge_v1_3_0_sex-corrected-meta.tsv", data.table=FALSE)
+```
+
+# ==============================================================================
+# SECTION 4: Load exclusion list (genes with known retinal mutations)
+# ==============================================================================
+
+Read genes with known retinal degeneration mutations to exclude from analysis
+These are filtered out to avoid confounding Strain Recommender results
+
+```{r}
+mutation_genes <- c("Pde6b", "Prph2", "Mitf", "Gnat2", "Crb1")
+cat("Genes with a known mutation are filtered out.\n", mutation_genes)
+```
+
+# ==============================================================================
+# SECTION 5: Load validation strain list (JAX AMD/retinal degeneration strains)
+# ==============================================================================
+
+Read list of JAX strains known to have retinal degeneration phenotypes
+These serve as positive controls for validation
+
+```{r}
+amd_strains <- read.table("/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/amd_jax_strains.txt",
+                          header=TRUE)[,1]
+```
+
+
+# ==============================================================================
+# SECTION 6: Process AMD antisense gene expression data
+# ==============================================================================
+
+Load differentially expressed antisense genes from retinal tissue
+Source: Supplementary Table 2 from PMID 29445097
+
+
+```{r}
+dd_retina <- fread("/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/DEantisense_retina_41598_2018_21104_MOESM3_ESM.csv", data.table=FALSE)
+dd_rpe <- fread("/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/DEantisense_rpe_41598_2018_21104_MOESM3_ESM.csv", data.table=FALSE)
+qvalue_threshold <- 0.0001
+# genes in both de gene sets
+in_both <- intersect( dd_retina %>% 
+  filter(BH.qvalue <= qvalue_threshold) %>% 
+  dplyr::select(id) %>% 
+  distinct() %>% t() %>% as.vector(., "character") , 
+  dd_rpe %>% filter(BH.qvalue <= qvalue_threshold) %>% 
+  dplyr::select(id) %>% 
+  distinct() %>% t() %>% as.vector(., "character") )
+
+# Create final gene set using retinal logFC values (strongest signal)
+# Filter for genes present in both tissues and map to mouse orthologs
+
+gs_retina_human <- dd_retina %>% 
+  filter(BH.qvalue <= qvalue_threshold & 
+           id %in% in_both) %>% 
+  select(id, logFC)
+
+fwrite(gs_retina_human, "/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/amd_human_gs_both-rpe-and-retina_retina_logfc_PMID29445097.csv",
+       row.names = FALSE)
+
+
+gs_retina_both <- dd_retina %>% 
+  filter(BH.qvalue <= qvalue_threshold & 
+           id %in% in_both) %>% 
+  rename(h_gene_id = id, score = logFC) %>% 
+  inner_join(., h2m[, c("h_gene_id", "m_gene_id")], join_by(h_gene_id)) %>% 
+  dplyr::select(m_gene_id, score) %>% 
+  rename(gene_id = m_gene_id) %>% 
+  distinct()
+
+any(gs_retina_both$gene_id %in% mutation_genes)
+
+fwrite(gs_retina_both, "/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/amd_gs_both-rpe-and-retina_retina_log2fc_PMID29445097.csv",
+       row.names = FALSE)
+```
+None of the genes with known mutations are in the gene set.
+
+# ==============================================================================
+# SECTION 7: Run Strain Recommender
+# ==============================================================================
+
+Apply recommendation system to identify mouse strains with similar expression
+profiles to the AMD antisense gene signature
+
+```{r}
+amd_recommender <- recommend(df = mesc_df, meta = mesc_meta, gs=gs_retina_both, code_dir = code_dir) %>% 
+  filter(sex == "both")
+```
+# ==============================================================================
+# SECTION 8: Validate results against known retinal degeneration strains
+# ==============================================================================
+
+Display results for known JAX retinal degeneration strains (validation)
+
+```{r}
+amd_recommender %>% 
+  filter(strain %in% amd_strains) %>% 
+  arrange(-corr)
+
+amd_recommender %>% 
+  mutate(corr = corr / abs(max(corr))) %>% 
+  select(-sex) %>% 
+  fwrite(., paste0("/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/amd_recommender-results_both-rpe-and-retina_retina_log2fc_PMID29445097.csv"))
+```
+
+# ==============================================================================
+# SECTION 9: Save results with validation annotations
+# ==============================================================================
+
+Add binary flag indicating whether strain is a known JAX retinal degeneration strain
+
+
+```{r}
+amd_recommender$jax_amd_strain <- as.numeric(amd_recommender$strain %in% amd_strains)
+fwrite(amd_recommender, "/projects/chesler-lab/jcpg/imputation/robyn/jcpg/retrospective/AMD/data/amd_recommender_results_2026-02-13_noF1s.csv")
+```
+

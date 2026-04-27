@@ -1,0 +1,192 @@
+---
+title: "Disease sensitivity and sensitivity analysis (FPR threshold) across other tissue types"
+---
+
+Purpose: The following code reads in the global validation study results to assess sensitivity mean sensitivity when setting fpr cutoffs in 0.05 increments.
+
+```{r}
+
+# load necessary packages
+library(tidyverse)
+library(data.table) 
+library(R.utils)
+library(binom)
+library(patchwork)
+
+```
+
+Source functions
+
+unit tests for functions in unit_tests/
+
+```{r}
+setwd('/projects/chesler-lab/jcpg/retrospective/kleina/jcpg/recommender_manuscript/global_validation')
+source("retrospective_function_process_data.R")
+source("retrospective_function_get_sensitivity.R")
+source("retrospective_function_check_exclusions.R")
+```
+
+Read in the results table before fprA filtering. This contains 129 gene sets.
+```{r}
+setwd('/projects/chesler-lab/jcpg/retrospective/kleina/jcpg/recommender_manuscript/global_validation')
+mesc_results <- fread("data/supplementary_table3.csv.gz", data.table = FALSE)
+length(unique(mesc_results$gs_id))
+```
+
+Read in the other tissue results tables before fprA filtering. These contain the same 129 gene sets as the mESC result table (`results`).
+function: read in all processed tissue type results
+```{r}
+
+read_tissue_results <- function(dir_path = "/projects/chesler-lab/jcpg/retrospective/kleina/retrospective_analysis/results") {
+  files <- list.files(dir_path, pattern = "_129_full_res_prefprfilter_corrected_final_dups_removed_2026-04-02.csv.gz", full.names = TRUE)
+  names(files) <- gsub("_129_full_res_prefprfilter_corrected_final_dups_removed_2026-04-02.csv.gz", "", basename(files))
+  files <- files[names(files) != "mESC"]
+  
+  res_list <- lapply(files, \(f) {
+  message("Reading: ", basename(f))
+  as_tibble(data.table::fread(f))
+})
+  
+  # assign to global env as tissue_res
+  iwalk(res_list, ~assign(paste0(.y, "_results"), .x, envir = .GlobalEnv))
+  
+  invisible(res_list)
+}
+
+```
+
+```{r}
+
+tissue_types <- c("mesc", "heart", "liver", "retina", "rpe", "bone", 
+                   "pfc_saline", "skeletal", "striatum_saline", 
+                   "adipose", "striatum", "islet", "hippocampus", "maxilla")
+
+```
+
+rare disease list accessed via Orphanet on Oct 25, 2024.  
+```{r}
+
+rare <- fread("/projects/chesler-lab/jcpg/retrospective/kleina/jcpg/recommender_manuscript/global_validation/data/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+#rare <- fread("data/List_of_rare_diseases_in_alphabetical_order.csv", data.table = FALSE)
+
+```
+
+read in each of the tissue result files, and when doing so, get an idea of the fprA distribution via a simple histogram, summary stats.
+```{r}
+
+res_list <- read_tissue_results()
+
+plots <- imap(res_list, \(res, tissue) {
+  message("Tissue type: ", tissue)
+  print(summary(res$fprA))
+  
+  ggplot(data = res) +
+    geom_histogram(aes(fprA), bins = 20) +
+    theme_bw() +
+    ggtitle(tissue)
+})
+
+```
+look at the plots
+```{r}
+
+plots
+
+```
+
+calculate mean sensivitivty for each tissue
+```{r}
+# unique comparison variables
+single <- c("gs_id", "strainA", "strainB", "MP_ID", "jnum_id", "disease_name")
+# imputed transcriptome
+#tissue <- "mESC"
+thresholds <- c(0.05, 0.10, 0.15, 0.20)
+ 
+```
+
+```{r}
+
+run_thresholds <- function(tissue, thresholds) {
+  res <- get(paste0(tissue, "_results"))
+  
+  n_diseases <- NULL
+  thresholded_results <- data.frame()
+  
+  for (threshold in thresholds) {
+    main <- process_data(df_all = res, rare = rare, thresh = threshold, tissue = 'tissue')
+    disease_sensitivities <- main[[2]]
+    disease_sensitivities$thresh = threshold
+    disease_sensitivities$tissue = tissue
+    n_diseases <- c(n_diseases, nrow(disease_sensitivities))
+    thresholded_results <- rbind(thresholded_results, disease_sensitivities)
+  }
+  
+  names(n_diseases) <- thresholds
+  message(tissue, ":")
+  print(n_diseases)
+  
+  list(n_diseases = n_diseases, thresholded_results = thresholded_results)
+}
+
+```
+
+run `thresholded_results()` across all tissues
+```{r}
+
+all_thresh_results <- lapply(tissue_types, \(t) {
+  message("Processing: ", t)
+  run_thresholds(t, thresholds)
+})
+names(all_thresh_results) <- tissue_types
+
+combined_thresh_res <- bind_rows(lapply(all_thresh_results, \(x) x$thresholded_results))
+
+```
+
+# Calculate mean sensitivity and 95% CI for thresholds using threshold results
+
+```{r}
+
+calc_mean_sensitivity <- function(thresholded_results, thresholds) {
+  
+  mean_sensitivity <- data.frame()
+  for (threshold in thresholds) {
+    subset <- thresholded_results %>% 
+      filter(thresh == threshold)
+    n <- nrow(subset)
+    p <- mean(subset$sensitivity) 
+    sd <- sd(subset$sensitivity)
+    s <- 1.96 * (sd / sqrt(n))
+    mean_sensitivity <- rbind(mean_sensitivity,
+                              data.frame(thresh = threshold, mean = round(p, 3),
+                                         lower = round(p - s, 3), upper = round(p + s, 3)))
+  }
+  mean_sensitivity
+}
+
+```
+
+```{r}
+
+all_mean_sensitivity <- lapply(tissue_types, \(t) {
+  tr <- all_thresh_results[[t]]$thresholded_results
+  ms <- calc_mean_sensitivity(tr, thresholds)
+  ms$tissue <- t
+  ms
+})
+
+combined_mean_sensitivity <- bind_rows(all_mean_sensitivity)
+
+combined_mean_sensitivity <- combined_mean_sensitivity %>% select(tissue, thresh, mean, lower, upper)
+
+```
+
+write reuslts to files
+```{r}
+
+fwrite(combined_thresh_res, file = '/projects/chesler-lab/jcpg/retrospective/kleina/jcpg/recommender_manuscript/global_validation/data/disease_sensitivity_by_thresh_2026-04-02.csv.gz', compress = 'gzip')
+fwrite(combined_mean_sensitivity, file = '/projects/chesler-lab/jcpg/retrospective/kleina/jcpg/recommender_manuscript/global_validation/data/mean_sensitivity_other_tissues_by_thresh_2026-04-02.csv.gz', compress = 'gzip')
+
+```
+
+
