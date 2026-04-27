@@ -1,0 +1,220 @@
+---
+title: "Strain Recommender Workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Strain Recommender Workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+library(recommender)
+```
+
+## Overview
+
+Strain Recommender is a computational tool that identifies which inbred 
+mouse strains are most biologically relevant to a disease of interest. Rather 
+than relying solely on traditional phenotypic similarity, it uses transcriptomic 
+data to match a disease-associated gene expression signature against predicted 
+gene expression profiles for 657 inbred mouse strains, returning a vulnerability 
+score and false positive rate (FPR) for each strain.
+
+The main inputs are:
+
+- **`gs`** — a data frame of gene scores representing a disease-associated gene 
+  expression signature, with columns `gene_id` (mouse Ensembl IDs) and `score`
+- **`meta`** — a data frame of sample metadata with columns `mouse_id`, `sex`, 
+  and `strain`
+- **`df`** — a data frame of gene expression data with `gene_id` as a column 
+  and samples as remaining columns
+
+---
+
+## Preparing Input Data
+
+Users will need to read their data in (gs, meta, and df) before passing 
+them to `recommend()`. For example:
+
+```{r eval=FALSE}
+gs   <- fread("path/to/gene_scores.csv", data.table = FALSE)
+meta <- fread("path/to/meta.csv", data.table = FALSE)
+df   <- fread("path/to/df.csv", data.table = FALSE)
+```
+
+Each input must be a data frame. See the `?recommend` documentation for full 
+column requirements.
+
+---
+
+## Simulated Example Data
+
+To illustrate use of the package, we use simulated data.
+
+```{r}
+set.seed(42)
+
+# Gene scores: disease-associated signature
+gs <- data.frame(
+  gene_id = c("ENSMUSG00000000168", "ENSMUSG00000000544", "ENSMUSG00000000792",
+              "ENSMUSG00000001017", "ENSMUSG00000001240", "ENSMUSG00000003068",
+              "ENSMUSG00000003134", "ENSMUSG00000003464", "ENSMUSG00000003644",
+              "ENSMUSG00000004768"),
+  score = c(1.5, -2.3, 0.8, -1.1, 2.0, -0.5, 1.7, -1.9, 0.6, 2.2)
+)
+
+# Metadata: one sample per strain
+meta <- data.frame(
+  mouse_id = paste0("sample", 1:10),
+  sex      = rep("both", 10),
+  strain   = paste0("strain", LETTERS[1:10])
+)
+
+# Expression data: genes x samples
+df <- data.frame(
+  gene_id = gs$gene_id,
+  matrix(rnorm(100, mean = 5, sd = 1.5), nrow = 10, ncol = 10,
+         dimnames = list(NULL, paste0("sample", 1:10)))
+)
+```
+
+---
+
+## Basic Workflow: Single Gene Set
+
+The simplest use case is a single gene set passed directly to `recommend()`:
+
+```{r}
+result <- recommend(gs   = gs,
+                    meta = meta,
+                    df   = df,
+                    B    = 100,       # use B=4000 in practice
+                    verbose = FALSE)
+
+head(result)
+```
+
+The output is a data frame with one row per strain containing:
+
+- **`strain`** — inbred mouse strain name
+- **`score`** — scaled Spearman correlation (vulnerability score) between the strain's 
+  predicted expression and the disease gene signature for easier interpretation.
+  Higher positive values indicate greater biological similarity to the disease state.
+- **`corr`** — Spearman correlation (vulnerability score) between the strain's 
+  predicted expression and the disease gene signature. Higher positive values 
+  indicate greater biological similarity to the disease state.
+- **`n`** — number of genes used in the prediction
+- **`fpr`** — false positive rate, estimated from a bootstrapped null 
+  distribution. Lower FPR indicates greater confidence in the vulnerability score.
+
+---
+
+## Interpreting the Output
+
+Sort strains by vulnerability score to identify top candidates:
+
+```{r}
+result_sorted <- result[order(result$score, decreasing = TRUE), ]
+head(result_sorted)
+```
+
+Strains with high positive `corr` and low `fpr` are the strongest candidates — 
+they are most transcriptomically similar to the disease-associated gene signature.
+
+A general interpretation guide:
+
+| Score Range     | Interpretation          | Predicted Phenotype                    | Recommended Use                   |
+|-----------------|-------------------------|----------------------------------------|-----------------------------------|
+| +0.5 to +1.0   | High Vulnerability      | Strongly mimics disease expression     | Disease model development         |
+| +0.1 to +0.5   | Moderate Vulnerability  | Partial alignment with disease         | May be suitable; check confidence |
+| −0.1 to +0.1   | Indeterminate           | Weak / no alignment                    | Consider alternative strains      |
+| −0.5 to −0.1   | Moderate Resistance     | Partial inverse of disease             | Control cohort candidate          |
+| −1.0 to −0.5   | High Resistance         | Strongly inversely aligned             | Protective / resilience studies   |
+
+---
+
+## Advanced Workflow: Multiple Gene Sets
+
+If your gene scores come from multiple sources or studies, you can normalize 
+them onto a common scale using `combine_genesets()` before running `recommend()`.
+This requires a `geneset` column in `gs` to distinguish which genes comes from which genes set:
+
+```{r}
+gs_multi <- data.frame(
+  gene_id = c("ENSMUSG00000000168", "ENSMUSG00000000544", "ENSMUSG00000000792",
+              "ENSMUSG00000001017", "ENSMUSG00000001240", "ENSMUSG00000003068",
+              "ENSMUSG00000003134", "ENSMUSG00000003464", "ENSMUSG00000003644",
+              "ENSMUSG00000004768"),
+  score   = c(1.5, -2.3, 0.8, -1.1, 2.0, -0.5, 1.7, -1.9, 0.6, 2.2),
+  geneset = c(rep("study1", 5), rep("study2", 5))
+)
+```
+
+### Option 1: Inspect combined gene set first
+
+You can preview the normalized gene scores before passing to `recommend()`:
+
+```{r}
+gs_combined <- combine_genesets(gs_multi)
+head(gs_combined)
+```
+
+Then pass the combined gene set to `recommend()`:
+
+```{r}
+result_combined <- recommend(gs      = gs_combined,
+                             meta    = meta,
+                             df      = df,
+                             B       = 100,
+                             combine_gs = FALSE, # this is the deafult.
+                             verbose = FALSE)
+head(result_combined)
+```
+
+Note: `combine_gs` default is FALSE. It should be set to FALSE when using a singular gene set or one that has already been combined.
+
+### Option 2: Combine within `recommend()`
+
+Alternatively, pass the multi-geneset data frame directly to `recommend()` with 
+`combine_gs = TRUE`:
+
+```{r}
+result_combined2 <- recommend(gs      = gs_multi,
+                              meta    = meta,
+                              df      = df,
+                              B       = 100,
+                              combine_gs = TRUE,
+                              verbose = FALSE)
+head(result_combined2)
+```
+
+Both options produce identical results. Option 1 is useful when you want to 
+inspect or save the normalized gene scores before proceeding.
+
+---
+
+## Reproducibility
+
+The FPR calculation relies on a bootstrapped null distribution. Use the `seed` 
+argument to ensure reproducibility:
+
+```{r eval=FALSE}
+result <- recommend(gs      = gs,
+                    meta    = meta,
+                    df      = df,
+                    seed    = 303,
+                    B       = 4000,
+                    verbose = FALSE)
+```
+
+---
+
+## Session Info
+
+```{r}
+sessionInfo()
+```

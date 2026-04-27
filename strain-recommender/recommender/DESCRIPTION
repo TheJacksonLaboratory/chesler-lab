@@ -1,0 +1,30 @@
+Package: recommender
+Title: Computational Tool for Identifying Biologically Relevant Inbred Mouse Strains
+Version: 1.0
+Authors@R: 
+    c(
+      person("Robyn", "L. Ball", , "robyn.ball@jax.org", role = c("aut", "cre")),
+      person("Alyssa", "Klein", , "alyssa.klein@jax.org", role = "aut"),
+      person("Elissa", "J. Chesler", , "elissa.chesler@jax.org", role = "aut")
+    )
+Description: A computational tool that helps researchers identify which inbred 
+    mouse strains are most biologically relevant to a disease of interest. 
+    Rather than relying solely on traditional phenotypic similarity, this tool 
+    uses transcriptomic data to match a disease-associated gene expression 
+    signature against predicted gene expression profiles for 657 inbred mouse 
+    strains, enabling more informed strain selection for disease modeling.
+URL: doi coming soon
+License: CC BY 4.0 + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.3
+Imports:
+    dplyr,
+    magrittr
+Suggests: 
+    data.table,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
