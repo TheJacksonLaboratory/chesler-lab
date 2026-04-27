@@ -24,8 +24,11 @@ execution via SLURM submission scripts.
 
 ## Quick Start
 
+```r
 # Load using the package name
 library(transcriptome.imputation)
+
+```
 
 Brief example here.
 
