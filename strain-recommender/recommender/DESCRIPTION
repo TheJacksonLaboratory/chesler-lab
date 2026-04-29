@@ -1,6 +1,6 @@
 Package: recommender
 Title: Computational Tool for Identifying Biologically Relevant Inbred Mouse Strains
-Version: 1.0
+Version: 1.0.0
 Authors@R: 
     c(
       person("Robyn", "L. Ball", , "robyn.ball@jax.org", role = c("aut", "cre")),
@@ -14,7 +14,7 @@ Description: A computational tool that helps researchers identify which inbred
     signature against predicted gene expression profiles for 657 inbred mouse 
     strains, enabling more informed strain selection for disease modeling.
 URL: doi coming soon
-License: CC BY 4.0 + file LICENSE
+License: CC BY-NC 4.0 + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.2.3
