@@ -8,6 +8,7 @@ Using Creative Commons Public Licenses
 
 Creative Commons public licenses provide a standard set of terms and conditions that creators and other rights holders may use to share original works of authorship and other material subject to copyright and certain other rights specified in the public license below. The following considerations are for informational purposes only, are not exhaustive, and do not form part of our licenses.
 
+```
  Considerations for licensors: Our public licenses are
  intended for use by those authorized to give the public
  permission to use material in ways otherwise restricted by
@@ -38,6 +39,7 @@ wiki.creativecommons.org/Considerations_for_licensors
  respect those requests where reasonable. More considerations
  for the public:
 wiki.creativecommons.org/Considerations_for_licensees
+```
 =======================================================================
 
 Creative Commons Attribution-NonCommercial 4.0 International Public License
