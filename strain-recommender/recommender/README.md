@@ -63,6 +63,7 @@ result <- recommend(gs = gs, meta = meta, df = df, B = 4000)
 result[order(result$score, decreasing = TRUE), ]
 ```
 
+## Learn More
 See the [full vignette](vignettes/strain-recommender-workflow.Rmd) for advanced usage including multiple gene sets and reproducibility options.
 
 ## Dependencies
@@ -74,4 +75,16 @@ See the [full vignette](vignettes/strain-recommender-workflow.Rmd) for advanced 
 ### Suggested
 - `data.table` — for efficient data loading in vignettes
 - `knitr` + `rmarkdown` — for building vignettes
-- `testthat` — for running tests
+
+## Citation
+
+If you use this package, please cite the associated paper (DOI forthcoming)
+
+To cite the package itself:
+
+> Ball RL, Klein A, Chesler EJ (2026). *recommender*: Computational Tool for 
+> Identifying Biologically Relevant Inbred Mouse Strains. R package version 1.0.0.
+> https://github.com/TheJacksonLaboratory/chesler-lab
+
+## License
+This package is licensed under CC BY-NC 4.0. See [LICENSE.md](LICENSE.md) for details.

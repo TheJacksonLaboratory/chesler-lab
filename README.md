@@ -8,5 +8,4 @@ The repo includes a folder for each project. Project folders contain all applica
 
 ##### strain-recommender
 - `recommender` - R package for running the strain recommender approach
-- `transcriptome.imputation` - R package for running the transcriptome imputation pipeline
 - `supporting-analyses` - includes all analysis code used to generate results in the manuscript
