@@ -74,6 +74,7 @@ Section 2 -- Scope.
 
 a. License grant.
 
+```
    1. Subject to the terms and conditions of this Public License,
       the Licensor hereby grants You a worldwide, royalty-free,
       non-sublicensable, non-exclusive, irrevocable license to
@@ -126,8 +127,10 @@ a. License grant.
       with, or sponsored, endorsed, or granted official status by,
       the Licensor or others designated to receive attribution as
       provided in Section 3(a)(1)(A)(i).
-b. Other rights.
+```
 
+b. Other rights.
+```
    1. Moral rights, such as the right of integrity, are not
       licensed under this Public License, nor are publicity,
       privacy, and/or other similar personality rights; however, to
@@ -147,12 +150,13 @@ b. Other rights.
       reserves any right to collect such royalties, including when
       the Licensed Material is used other than for NonCommercial
       purposes.
+```
 Section 3 -- License Conditions.
 
 Your exercise of the Licensed Rights is expressly made subject to the following conditions.
 
 a. Attribution.
-
+```
    1. If You Share the Licensed Material (including in modified
       form), You must:
 
@@ -196,6 +200,8 @@ a. Attribution.
    4. If You Share Adapted Material You produce, the Adapter's
       License You apply must not prevent recipients of the Adapted
       Material from complying with this Public License.
+
+```
 Section 4 -- Sui Generis Database Rights.
 
 Where the Licensed Rights include Sui Generis Database Rights that apply to Your use of the Licensed Material:
@@ -221,7 +227,7 @@ Section 6 -- Term and Termination.
 a. This Public License applies for the term of the Copyright and Similar Rights licensed here. However, if You fail to comply with this Public License, then Your rights under this Public License terminate automatically.
 
 b. Where Your right to use the Licensed Material has terminated under Section 6(a), it reinstates:
-
+```
    1. automatically as of the date the violation is cured, provided
       it is cured within 30 days of Your discovery of the
       violation; or
@@ -231,6 +237,7 @@ b. Where Your right to use the Licensed Material has terminated under Section 6(
  For the avoidance of doubt, this Section 6(b) does not affect any
  right the Licensor may have to seek remedies for Your violations
  of this Public License.
+```
 c. For the avoidance of doubt, the Licensor may also offer the Licensed Material under separate terms or conditions or stop distributing the Licensed Material at any time; however, doing so will not terminate this Public License.
 
 d. Sections 1, 5, 6, 7, and 8 survive termination of this Public License.
