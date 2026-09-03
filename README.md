@@ -9,3 +9,7 @@ The repo includes a folder for each project. Project folders contain all applica
 ##### strain-recommender
 - `recommender` - R package for running the strain recommender approach
 - `supporting-analyses` - includes all analysis code used to generate results in the manuscript
+
+##### CellMAGE
+
+Manuscript is currently under review (bioRxiv: insert url).
