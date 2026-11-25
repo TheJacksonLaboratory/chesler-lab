@@ -7,6 +7,9 @@ The repo includes a folder for each project. Project folders contain all applica
 #### Projects
 
 ##### strain-recommender
-- `recommender` - R package for running the strain recommender approach
-- `transcriptome.imputation` - R package for running the transcriptome imputation pipeline
-- `supporting-analyses` - includes all analysis code used to generate results in the manuscript
+
+Manuscript is current under review (bioRxiv: https://www.biorxiv.org/content/10.64898/2026.04.27.721175v1).
+
+##### CellMAGE
+
+Manuscript is currently under review (bioRxiv: https://www.biorxiv.org/content/10.64898/2026.09.08.750196v1).
